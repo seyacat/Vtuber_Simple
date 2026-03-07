@@ -10,6 +10,32 @@ const vowelDetectionEl = document.getElementById('vowelDetection');
 const vowelConfidenceEl = document.getElementById('vowelConfidence');
 const audioInputSelect = document.getElementById('audioInput');
 
+// Configuration
+let config = {
+    audio: { sampleRate: 16000, duration: 0.1, channels: 1, threshold: 0 },
+    features: { mfccCoefficients: 20, bufferSize: 1024, hopLength: 512, windowFunction: 'hann' },
+    training: { epochs: 40, batchSize: 32, validationSplit: 0.2, learningRate: 0.001, earlyStoppingPatience: 10 },
+    labels: ['A', 'E', 'I', 'O', 'U', 'noise'],
+    model: { inputShape: [20, 20, 1], outputClasses: 6 }
+};
+
+// Load configuration from config.json
+async function loadConfig() {
+    try {
+        const response = await fetch('./config.json');
+        if (!response.ok) {
+            console.warn('Could not load config.json, using default configuration');
+            return;
+        }
+        const loadedConfig = await response.json();
+        // Merge loaded config with defaults
+        config = { ...config, ...loadedConfig };
+        console.log('Configuration loaded from config.json:', config);
+    } catch (error) {
+        console.warn('Error loading config.json:', error, 'Using default configuration');
+    }
+}
+
 // Audio context and variables
 let audioContext;
 let analyser;
@@ -21,7 +47,6 @@ let isRecording = false;
 // TensorFlow.js variables for vowel detection
 let tfModel;
 let isModelReady = false;
-const vowels = ['A', 'E', 'I', 'O', 'U', 'noise'];
 let currentVowel = '--';
 let currentConfidence = 0;
 
@@ -228,13 +253,14 @@ function testModelFileAccessibility(modelPath) {
 }
 
 // Extract MFCC features from audio data (simplified version)
-function extractMFCCFeatures(audioBuffer, sampleRate = 16000) {
+function extractMFCCFeatures(audioBuffer, sampleRate = null) {
     // This is a simplified MFCC extraction for demonstration
     // In production, use a proper MFCC library like Meyda in the browser
     
-    const bufferSize = 1024;
-    const hopSize = 512;
-    const mfccCoefficients = 20;
+    const effectiveSampleRate = sampleRate || config.audio.sampleRate || 16000;
+    const bufferSize = config.features.bufferSize || 1024;
+    const hopSize = config.features.hopLength || 512;
+    const mfccCoefficients = config.features.mfccCoefficients || 20;
     
     // For now, return dummy features matching the expected shape
     // In a real implementation, you would:
@@ -255,10 +281,10 @@ function extractMFCCFeatures(audioBuffer, sampleRate = 16000) {
         features.push(frame);
     }
     
-    // Reshape to match model input (20x20)
+    // Reshape to match model input (from config)
     // Pad or truncate as needed
-    const targetRows = 20;
-    const targetCols = 20;
+    const targetRows = config.model.inputShape[0] || 20;
+    const targetCols = config.model.inputShape[1] || 20;
     
     let reshaped = [];
     for (let i = 0; i < targetRows; i++) {
@@ -305,7 +331,8 @@ function startTensorFlowClassification() {
         const features = extractMFCCFeatures(buffer, audioContext.sampleRate);
         
         // Convert to tensor and make prediction
-        const inputTensor = tf.tensor3d([features], [1, 20, 20, 1]);
+        const inputShape = config.model.inputShape; // [height, width, channels]
+        const inputTensor = tf.tensor4d(features.flat(), [1, inputShape[0], inputShape[1], inputShape[2]]);
         const prediction = tfModel.predict(inputTensor);
         const results = prediction.arraySync()[0];
         
@@ -321,7 +348,7 @@ function startTensorFlowClassification() {
         }
         
         // Update UI
-        currentVowel = vowels[maxIndex];
+        currentVowel = config.labels[maxIndex] || 'unknown';
         currentConfidence = maxProb * 100;
         
         vowelDetectionEl.textContent = currentVowel;
@@ -441,6 +468,9 @@ stopBtn.addEventListener('click', stopMicrophone);
 // Initialize on load
 window.addEventListener('load', async () => {
     console.log('Application loading...');
+    
+    // Load configuration
+    await loadConfig();
     
     // Initialize TensorFlow.js model
     await initializeTensorFlowModel();

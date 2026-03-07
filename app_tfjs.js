@@ -298,7 +298,7 @@ function startTensorFlowClassification() {
         const features = extractMFCCFeatures(buffer, audioContext.sampleRate);
         
         // Convert to tensor and make prediction
-        const inputTensor = tf.tensor3d([features], [1, 43, 232, 1]);
+        const inputTensor = tf.tensor4d(features.flat(), [1, 43, 232, 1]);
         const prediction = tfModel.predict(inputTensor);
         const results = prediction.arraySync()[0];
         
