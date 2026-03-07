@@ -322,9 +322,11 @@ function startTensorFlowClassification() {
         }
         
         // Get current audio data from analyser
-        if (!analyser || !dataArray) return;
+        if (!analyser) return;
         
-        const buffer = new Float32Array(dataArray.length);
+        // Create buffer for time domain data (size = fftSize)
+        const bufferSize = analyser.fftSize;
+        const buffer = new Float32Array(bufferSize);
         analyser.getFloatTimeDomainData(buffer);
         
         // Extract features
@@ -385,15 +387,23 @@ async function startMicrophone() {
             }
         });
 
-        // Create audio context
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        // Create audio context with configured sample rate
+        const sampleRate = config.audio.sampleRate || 16000;
+        audioContext = new (window.AudioContext || window.webkitAudioContext)({
+            sampleRate: sampleRate
+        });
         analyser = audioContext.createAnalyser();
         source = audioContext.createMediaStreamSource(stream);
 
-        // Configure analyser
-        analyser.fftSize = 2048;
+        // Configure analyser for 0.1s audio capture
+        // Calculate samples needed for configured duration
+        const duration = config.audio.duration || 0.1; // seconds
+        const samplesNeeded = Math.floor(sampleRate * duration);
+        // Use next power of 2 for fftSize
+        const fftSize = Math.pow(2, Math.ceil(Math.log2(samplesNeeded)));
+        analyser.fftSize = fftSize;
         const bufferLength = analyser.frequencyBinCount;
-        dataArray = new Uint8Array(bufferLength);
+        dataArray = new Uint8Array(bufferLength); // For visualization (getByteTimeDomainData)
 
         // Connect nodes
         source.connect(analyser);
