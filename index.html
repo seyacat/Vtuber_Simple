@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Microphone Waveform Visualizer</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/0.9.0/p5.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/0.9.0/addons/p5.dom.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Microphone Waveform Visualizer</h1>
+            <p class="subtitle">Real-time audio visualization using Web Audio API</p>
+        </header>
+
+        <main class="card">
+            <div class="controls">
+                <div class="device-selector">
+                    <label for="audioInput">
+                        <i class="fas fa-microphone-alt"></i>
+                        Select Audio Input:
+                    </label>
+                    <select id="audioInput" class="device-select">
+                        <option value="default">Default Microphone</option>
+                    </select>
+                </div>
+                
+                <div class="control-buttons">
+                    <button id="startBtn">
+                        <i class="fas fa-microphone"></i>
+                        Start Microphone
+                    </button>
+                    <button id="stopBtn" disabled>
+                        <i class="fas fa-stop"></i>
+                        Stop Microphone
+                    </button>
+                </div>
+            </div>
+
+            <div id="status" class="status status-inactive">
+                Starting microphone automatically...
+            </div>
+
+            <div class="visualization-container">
+                <canvas id="waveformCanvas"></canvas>
+                <div class="canvas-overlay" id="canvasOverlay">
+                    Starting microphone to see real-time waveform visualization
+                </div>
+            </div>
+
+            <div class="info-panel">
+                <div class="info-box">
+                    <h3>Volume Level</h3>
+                    <p id="volumeLevel">0 dB</p>
+                </div>
+                <div class="info-box">
+                    <h3>Frequency</h3>
+                    <p id="frequencyValue">0 Hz</p>
+                </div>
+                <div class="info-box">
+                    <h3>Vowel Detection</h3>
+                    <p id="vowelDetection">--</p>
+                </div>
+                <div class="info-box">
+                    <h3>Confidence</h3>
+                    <p id="vowelConfidence">--%</p>
+                </div>
+            </div>
+
+            <div class="instructions">
+                <h3>How to use:</h3>
+                <ul>
+                    <li>Select your microphone from the dropdown menu (optional)</li>
+                    <li>The microphone starts automatically after loading</li>
+                    <li>Speak vowels (A, E, I, O, U) to see real-time vowel detection</li>
+                    <li>The system uses a machine learning model trained with Teachable Machine</li>
+                    <li>The visualization shows amplitude over time (time-domain)</li>
+                    <li>Volume level shows the current audio intensity</li>
+                    <li>Vowel detection shows which vowel is being spoken</li>
+                    <li>Confidence shows how sure the system is about the detection</li>
+                    <li>Click "Stop Microphone" to end the audio capture</li>
+                    <li>Click "Start Microphone" to restart if needed</li>
+                    <li>Your browser will ask for microphone permission - please allow it</li>
+                    <li>If your microphone doesn't appear, click "Start Microphone" to refresh the device list</li>
+                    <li>The microphone continues recording even when the tab is in the background</li>
+                    <li>The app remembers your last selected microphone for future sessions</li>
+                </ul>
+            </div>
+        </main>
+
+        <footer>
+            <p>Built with Web Audio API & Canvas | Works in modern browsers with microphone support</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
