@@ -2,7 +2,7 @@
 // Main Application File
 // Depends on config.js and lpc-core.js
 import { config, loadConfig } from './config.js';
-import { analyzeFrame, toggleCalibration, initCalibrationUI } from './lpc-core.js';
+import { analyzeFrame, toggleCalibration, initCalibrationUI } from './mel-core.js';
 
 // DOM Elements
 const startBtn = document.getElementById('startBtn');
@@ -136,17 +136,18 @@ function animate() {
         return;
     }
     
-    // Get time domain data for waveform
-    analyser.getByteTimeDomainData(dataArray);
-    
-    // Get time domain data for waveform and LPC analysis
-    analyser.getFloatTimeDomainData(frequencyData);
-    
-    // Convert for the waveform visualizer
+    // Get time domain data for waveform visualization
     analyser.getByteTimeDomainData(dataArray);
 
-    // Analyze using LPC
-    analyzeFrame(frequencyData, audioContext.sampleRate);
+    // Get float frequency data (in dB) for Mel Filterbank visualization
+    analyser.getFloatFrequencyData(frequencyData);
+
+    // Get time domain data as floats for volume calculation
+    const timeDataFloat = new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(timeDataFloat);
+
+    // Analyze using Mel Filterbanks
+    analyzeFrame(timeDataFloat, frequencyData, audioContext.sampleRate, analyser.fftSize);
     
     // Draw waveform
     drawWaveform();
@@ -222,7 +223,7 @@ async function startMicrophone() {
         
         // Create data arrays
         dataArray = new Uint8Array(analyser.fftSize);
-        frequencyData = new Float32Array(analyser.fftSize);
+        frequencyData = new Float32Array(analyser.frequencyBinCount);
         
         // Resume audio context if suspended (required by autoplay policy)
         if (audioContext.state === 'suspended') {
