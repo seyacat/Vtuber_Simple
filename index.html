@@ -37,6 +37,10 @@
                         <i class="fas fa-stop"></i>
                         Stop Microphone
                     </button>
+                    <button id="calibrateBtn" class="calibrate-btn">
+                        <i class="fas fa-sliders-h"></i>
+                        Calibrar
+                    </button>
                 </div>
             </div>
 
@@ -76,13 +80,15 @@
                     <li>Select your microphone from the dropdown menu (optional)</li>
                     <li>The microphone starts automatically after loading</li>
                     <li>Speak vowels (A, E, I, O, U) to see real-time vowel detection</li>
-                    <li>The system uses formant frequency analysis (F1, F2) for vowel detection</li>
+                    <li>The system uses 5-band spectral fingerprinting for vowel detection</li>
                     <li>The visualization shows amplitude over time (time-domain)</li>
                     <li>Volume level shows the current audio intensity</li>
                     <li>Vowel detection shows which vowel is being spoken</li>
                     <li>Confidence shows how sure the system is about the detection</li>
                     <li>Click "Stop Microphone" to end the audio capture</li>
                     <li>Click "Start Microphone" to restart if needed</li>
+                    <li>Click "Calibrar" button to enter calibration mode and log fingerprint values</li>
+                    <li>In calibration mode, speak vowels clearly to see 5-band values in console</li>
                     <li>Your browser will ask for microphone permission - please allow it</li>
                     <li>If your microphone doesn't appear, click "Start Microphone" to refresh the device list</li>
                     <li>The microphone continues recording even when the tab is in the background</li>

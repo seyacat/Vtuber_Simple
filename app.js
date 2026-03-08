@@ -1,6 +1,7 @@
 // DOM Elements
 const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
+const calibrateBtn = document.getElementById('calibrateBtn');
 const statusEl = document.getElementById('status');
 const canvas = document.getElementById('waveformCanvas');
 const canvasOverlay = document.getElementById('canvasOverlay');
@@ -350,16 +351,57 @@ function analyzeFingerprint() {
         const fingerprintStr = fingerprint.map(v => v.toFixed(2)).join(', ');
         console.log(`5-Band Fingerprint: [${fingerprintStr}] → ${vowel} (${confidence.toFixed(2)})`);
     }
+    
+    // Log calibration data when calibration mode is active
+    if (calibrationMode && vowel !== 'noise' && confidence > 0.3) {
+        logCalibrationData(vowel, fingerprint, confidence);
+    }
+    
+    // Always log band values when there's audio (not silence) for calibration
+    // This helps calibrate the bands even without calibration mode
+    if (fingerprint && fingerprint.some(val => val > 0.1)) {
+        // Create detailed band information
+        const bandDetails = fingerprint.map((val, i) => {
+            const band = config.fingerprintBands[i];
+            const range = band.range;
+            const percent = (val * 100).toFixed(1);
+            return `${band.name}(${range[0]}-${range[1]}Hz):${percent}%`;
+        }).join(' | ');
+        
+        // Log more frequently in calibration mode, otherwise occasionally
+        const logProbability = calibrationMode ? 0.5 : 0.1; // 50% in calibration mode, 10% normally
+        if (Math.random() < logProbability) {
+            console.log(`Bandas: ${bandDetails}`);
+            
+            // If a vowel is detected with reasonable confidence, suggest calibration
+            if (vowel !== 'noise' && confidence > 0.3) {
+                console.log(`  Para calibrar "${vowel}": [${fingerprint.map(v => v.toFixed(3)).join(', ')}]`);
+                console.log(`  Actual en config: [${config.vowelFingerprints[vowel].map(v => v.toFixed(3)).join(', ')}]`);
+            }
+        }
+    }
 }
 
 // Calibration mode - log fingerprint values for tuning
 let calibrationMode = false;
 function toggleCalibration() {
     calibrationMode = !calibrationMode;
-    console.log(`Calibration mode: ${calibrationMode ? 'ON' : 'OFF'}`);
+    
+    // Update button appearance
     if (calibrationMode) {
+        calibrateBtn.classList.add('active');
+        calibrateBtn.innerHTML = '<i class="fas fa-sliders-h"></i> Calibrando...';
+        console.log('Calibration mode: ON');
         console.log('Speak vowels clearly. The system will log 5-band fingerprint values for tuning.');
         console.log('Current 5-band reference fingerprints:', config.vowelFingerprints);
+        updateStatus(true, 'Modo calibración: Habla vocales claramente (A, E, I, O, U)');
+    } else {
+        calibrateBtn.classList.remove('active');
+        calibrateBtn.innerHTML = '<i class="fas fa-sliders-h"></i> Calibrar';
+        console.log('Calibration mode: OFF');
+        if (isRecording) {
+            updateStatus(true, 'Microphone active. Speak vowels for detection.');
+        }
     }
 }
 
@@ -481,6 +523,7 @@ function stopMicrophone() {
 // Event listeners
 startBtn.addEventListener('click', startMicrophone);
 stopBtn.addEventListener('click', stopMicrophone);
+calibrateBtn.addEventListener('click', toggleCalibration);
 
 // Initialize on load
 window.addEventListener('load', async () => {
