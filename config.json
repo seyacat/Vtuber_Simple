@@ -1,26 +1,27 @@
 {
   "audio": {
     "sampleRate": 16000,
-    "duration": 0.1,
-    "channels": 1,
-    "threshold": 0
+    "bufferSize": 2048,
+    "fftSize": 2048,
+    "minFrequency": 80,
+    "maxFrequency": 4000
   },
-  "features": {
-    "mfccCoefficients": 20,
-    "bufferSize": 1024,
-    "hopLength": 512,
-    "windowFunction": "hann"
+  "formants": {
+    "A": { "F1": [700, 900], "F2": [1100, 1300] },
+    "E": { "F1": [400, 600], "F2": [1700, 2100] },
+    "I": { "F1": [250, 350], "F2": [2100, 2500] },
+    "O": { "F1": [400, 600], "F2": [800, 1000] },
+    "U": { "F1": [250, 350], "F2": [600, 900] }
   },
-  "training": {
-    "epochs": 40,
-    "batchSize": 32,
-    "validationSplit": 0.2,
-    "learningRate": 0.001,
-    "earlyStoppingPatience": 10
+  "detection": {
+    "confidenceThreshold": 0.7,
+    "smoothingWindow": 5,
+    "minVolumeDb": -40,
+    "peakThreshold": 0.3,
+    "formantSearchRange": {
+      "F1": [200, 1000],
+      "F2": [500, 3000]
+    }
   },
-  "labels": ["A", "E", "I", "O", "U", "noise"],
-  "model": {
-    "inputShape": [20, 20, 1],
-    "outputClasses": 6
-  }
+  "labels": ["A", "E", "I", "O", "U", "noise"]
 }

@@ -12,11 +12,22 @@ const audioInputSelect = document.getElementById('audioInput');
 
 // Configuration
 let config = {
-    audio: { sampleRate: 16000, duration: 0.1, channels: 1, threshold: 0 },
-    features: { mfccCoefficients: 20, bufferSize: 1024, hopLength: 512, windowFunction: 'hann' },
-    training: { epochs: 40, batchSize: 32, validationSplit: 0.2, learningRate: 0.001, earlyStoppingPatience: 10 },
-    labels: ['A', 'E', 'I', 'O', 'U', 'noise'],
-    model: { inputShape: [20, 20, 1], outputClasses: 6 }
+    audio: { sampleRate: 16000, bufferSize: 2048, fftSize: 2048, minFrequency: 80, maxFrequency: 4000 },
+    formants: {
+        A: { F1: [700, 900], F2: [1100, 1300] },
+        E: { F1: [400, 600], F2: [1700, 2100] },
+        I: { F1: [250, 350], F2: [2100, 2500] },
+        O: { F1: [400, 600], F2: [800, 1000] },
+        U: { F1: [250, 350], F2: [600, 900] }
+    },
+    detection: {
+        confidenceThreshold: 0.7,
+        smoothingWindow: 5,
+        minVolumeDb: -40,
+        peakThreshold: 0.3,
+        formantSearchRange: { F1: [200, 1000], F2: [500, 3000] }
+    },
+    labels: ['A', 'E', 'I', 'O', 'U', 'noise']
 };
 
 // Load configuration from config.json
@@ -41,14 +52,15 @@ let audioContext;
 let analyser;
 let source;
 let dataArray;
+let frequencyData;
 let animationId;
 let isRecording = false;
 
-// TensorFlow.js variables for vowel detection
-let tfModel;
-let isModelReady = false;
+// Formant detection variables
 let currentVowel = '--';
 let currentConfidence = 0;
+let formantHistory = [];
+const MAX_HISTORY = 10;
 
 // Canvas setup
 const ctx = canvas.getContext('2d');
@@ -153,221 +165,218 @@ function drawWaveform() {
     ctx.lineTo(canvasWidth, canvasHeight / 2);
     ctx.stroke();
 
+    // Perform formant analysis if volume is above threshold
+    if (db > config.detection.minVolumeDb) {
+        analyzeFormants();
+    } else {
+        // If volume is too low, reset detection
+        currentVowel = '--';
+        currentConfidence = 0;
+        vowelDetectionEl.textContent = currentVowel;
+        vowelConfidenceEl.textContent = '--%';
+    }
+
     // Continue animation
     animationId = requestAnimationFrame(drawWaveform);
 }
 
-// Initialize TensorFlow.js model for vowel detection
-async function initializeTensorFlowModel() {
-    if (!tf) {
-        console.error('TensorFlow.js library not loaded');
-        updateStatus(false, 'Error loading TensorFlow.js library.');
-        return;
+// Find spectral peaks in frequency data
+function findSpectralPeaks(frequencyData) {
+    const peaks = [];
+    const peakThreshold = config.detection.peakThreshold || 0.1; // Lower threshold
+    
+    // Convert from dB to linear scale for better peak detection
+    const linearData = frequencyData.map(value => Math.pow(10, value / 20));
+    
+    // Normalize frequency data
+    const maxValue = Math.max(...linearData);
+    if (maxValue === 0) return peaks;
+    
+    const normalizedData = linearData.map(value => value / maxValue);
+    
+    // Apply simple smoothing (3-point moving average)
+    const smoothedData = [];
+    for (let i = 0; i < normalizedData.length; i++) {
+        const prev = i > 0 ? normalizedData[i - 1] : normalizedData[i];
+        const next = i < normalizedData.length - 1 ? normalizedData[i + 1] : normalizedData[i];
+        smoothedData[i] = (prev + normalizedData[i] + next) / 3;
     }
     
-    // Use local model from trained_web/tfjs_model folder
-    const modelPath = './trained_web/tfjs_model/model.json';
-    
-    console.log('Loading TensorFlow.js model from:', modelPath);
-    
-    // Pre-check: Test if model files are accessible
-    testModelFileAccessibility(modelPath);
-    
-    // Load the model
-    try {
-        console.log('Loading TensorFlow.js model...');
-        
-        tfModel = await tf.loadLayersModel(modelPath);
-        
-        console.log('TensorFlow.js model loaded:', tfModel);
-        
-        // Check if model was created successfully
-        if (!tfModel) {
-            console.error('tfModel returned null/undefined');
-            updateStatus(false, 'Failed to load TensorFlow.js model. Using frequency-based detection.');
-            isModelReady = false;
-            return;
-        }
-        
-        // Print model summary
-        console.log('Model summary:');
-        tfModel.summary();
-        
-        console.log('Model ready to use');
-        isModelReady = true;
-        
-        // Start classifying if microphone is already recording
-        if (isRecording) {
-            startTensorFlowClassification();
-        }
-        
-    } catch (error) {
-        console.error('Error loading TensorFlow.js model:', error);
-        updateStatus(false, 'Error loading vowel detection model. Using frequency-based detection.');
-        isModelReady = false;
-    }
-}
-
-// Helper function to diagnose model loading errors
-function testModelFileAccessibility(modelPath) {
-    console.log('Testing model file accessibility...');
-    
-    // Test if model.json is accessible
-    fetch(modelPath)
-        .then(response => {
-            console.log('Model fetch status:', response.status, response.statusText);
-            if (response.ok) {
-                return response.json();
+    // Find local maxima with wider window for better detection
+    for (let i = 2; i < smoothedData.length - 2; i++) {
+        if (smoothedData[i] > smoothedData[i - 1] &&
+            smoothedData[i] > smoothedData[i + 1] &&
+            smoothedData[i] > smoothedData[i - 2] &&
+            smoothedData[i] > smoothedData[i + 2] &&
+            smoothedData[i] > peakThreshold) {
+            
+            // Convert bin index to frequency
+            const frequency = i * audioContext.sampleRate / analyser.fftSize;
+            
+            // Only consider frequencies in human speech range
+            if (frequency >= config.audio.minFrequency && frequency <= config.audio.maxFrequency) {
+                peaks.push({
+                    frequency: frequency,
+                    amplitude: smoothedData[i],
+                    rawAmplitude: frequencyData[i]
+                });
             }
-            throw new Error('Model fetch failed: ' + response.status);
-        })
-        .then(modelJson => {
-            console.log('Model JSON loaded successfully');
-            console.log('Model architecture layers:', modelJson.modelTopology?.config?.layers?.length || 'unknown');
-        })
-        .catch(error => {
-            console.error('Model accessibility test failed:', error);
-        });
-    
-    // Test if weights are accessible (TensorFlow.js models use group1-shard1of1.bin)
-    const weightsPath = modelPath.replace('model.json', 'group1-shard1of1.bin');
-    fetch(weightsPath)
-        .then(response => {
-            console.log('Weights fetch status:', response.status, response.statusText);
-            if (response.ok) {
-                console.log('Weights file accessible');
-            } else {
-                console.warn('Weights file may not be accessible:', response.status);
-                // Also try the old weights.bin name for backward compatibility
-                const oldWeightsPath = modelPath.replace('model.json', 'weights.bin');
-                fetch(oldWeightsPath)
-                    .then(response2 => {
-                        console.log('Alternative weights fetch status:', response2.status, response2.statusText);
-                    })
-                    .catch(() => {});
-            }
-        })
-        .catch(error => {
-            console.error('Weights accessibility test failed:', error);
-        });
-}
-
-// Extract MFCC features from audio data (simplified version)
-function extractMFCCFeatures(audioBuffer, sampleRate = null) {
-    // This is a simplified MFCC extraction for demonstration
-    // In production, use a proper MFCC library like Meyda in the browser
-    
-    const effectiveSampleRate = sampleRate || config.audio.sampleRate || 16000;
-    const bufferSize = config.features.bufferSize || 1024;
-    const hopSize = config.features.hopLength || 512;
-    const mfccCoefficients = config.features.mfccCoefficients || 20;
-    
-    // For now, return dummy features matching the expected shape
-    // In a real implementation, you would:
-    // 1. Apply windowing
-    // 2. Compute FFT
-    // 3. Apply Mel filterbank
-    // 4. Compute DCT to get MFCCs
-    
-    const numFrames = Math.floor((audioBuffer.length - bufferSize) / hopSize) + 1;
-    const features = [];
-    
-    for (let i = 0; i < numFrames; i++) {
-        const frame = [];
-        for (let j = 0; j < mfccCoefficients; j++) {
-            // Simplified: random values for demonstration
-            frame.push(Math.random() * 2 - 1);
         }
-        features.push(frame);
     }
     
-    // Reshape to match model input (from config)
-    // Pad or truncate as needed
-    const targetRows = config.model.inputShape[0] || 20;
-    const targetCols = config.model.inputShape[1] || 20;
+    // Sort by amplitude (highest first)
+    peaks.sort((a, b) => b.amplitude - a.amplitude);
     
-    let reshaped = [];
-    for (let i = 0; i < targetRows; i++) {
-        const row = [];
-        for (let j = 0; j < targetCols; j++) {
-            const idx = i * targetCols + j;
-            if (idx < features.length * mfccCoefficients) {
-                const featureIdx = Math.floor(idx / mfccCoefficients);
-                const coeffIdx = idx % mfccCoefficients;
-                row.push(features[featureIdx]?.[coeffIdx] || 0);
-            } else {
-                row.push(0);
-            }
-        }
-        reshaped.push(row);
+    return peaks;
+}
+
+// Extract formant frequencies (F1 and F2) from spectral peaks
+function extractFormants(peaks) {
+    if (peaks.length < 2) return { F1: 0, F2: 0 };
+    
+    // The first formant (F1) is typically the lowest strong peak
+    // The second formant (F2) is the next strong peak above F1
+    
+    let F1 = 0;
+    let F2 = 0;
+    
+    // Sort peaks by frequency
+    const sortedPeaks = [...peaks].sort((a, b) => a.frequency - b.frequency);
+    
+    // Find F1 in the lower frequency range (200-1000 Hz)
+    const F1Range = config.detection.formantSearchRange.F1 || [200, 1000];
+    const F1Candidates = sortedPeaks.filter(p => p.frequency >= F1Range[0] && p.frequency <= F1Range[1]);
+    
+    if (F1Candidates.length > 0) {
+        // Take the strongest peak in F1 range
+        F1Candidates.sort((a, b) => b.amplitude - a.amplitude);
+        F1 = F1Candidates[0].frequency;
     }
     
-    return reshaped;
+    // Find F2 in the higher frequency range (500-3000 Hz)
+    const F2Range = config.detection.formantSearchRange.F2 || [500, 3000];
+    const F2Candidates = sortedPeaks.filter(p => p.frequency >= F2Range[0] && p.frequency <= F2Range[1] && p.frequency > F1 + 100);
+    
+    if (F2Candidates.length > 0) {
+        // Take the strongest peak in F2 range
+        F2Candidates.sort((a, b) => b.amplitude - a.amplitude);
+        F2 = F2Candidates[0].frequency;
+    }
+    
+    return { F1, F2 };
 }
 
-// Start TensorFlow.js classification
-function startTensorFlowClassification() {
-    if (!tfModel || !isModelReady) return;
+// Classify vowel based on formant frequencies
+function classifyVowelByFormants(F1, F2) {
+    if (F1 === 0 || F2 === 0) return { vowel: 'noise', confidence: 0 };
     
-    console.log('Starting TensorFlow.js classification');
+    let bestMatch = 'noise';
+    let bestConfidence = 0;
     
-    // We'll classify audio in real-time
-    // For now, we'll simulate classification every 500ms
-    // In production, this would process audio buffers in real-time
-    
-    const classificationInterval = setInterval(() => {
-        if (!isRecording) {
-            clearInterval(classificationInterval);
-            return;
+    // Check each vowel's formant ranges
+    for (const vowel of ['A', 'E', 'I', 'O', 'U']) {
+        const ranges = config.formants[vowel];
+        if (!ranges) continue;
+        
+        const [F1min, F1max] = ranges.F1;
+        const [F2min, F2max] = ranges.F2;
+        
+        // Calculate how close F1 and F2 are to the ideal ranges
+        const F1Distance = Math.max(0, Math.abs((F1 - (F1min + F1max) / 2) / ((F1max - F1min) / 2)));
+        const F2Distance = Math.max(0, Math.abs((F2 - (F2min + F2max) / 2) / ((F2max - F2min) / 2)));
+        
+        // Combined distance (lower is better)
+        const distance = Math.sqrt(F1Distance * F1Distance + F2Distance * F2Distance);
+        
+        // Convert distance to confidence (0-1)
+        const confidence = Math.max(0, 1 - distance / 2);
+        
+        if (confidence > bestConfidence) {
+            bestConfidence = confidence;
+            bestMatch = vowel;
         }
-        
-        // Get current audio data from analyser
-        if (!analyser) return;
-        
-        // Create buffer for time domain data (size = fftSize)
-        const bufferSize = analyser.fftSize;
-        const buffer = new Float32Array(bufferSize);
-        analyser.getFloatTimeDomainData(buffer);
-        
-        // Extract features
-        const features = extractMFCCFeatures(buffer, audioContext.sampleRate);
-        
-        // Convert to tensor and make prediction
-        const inputShape = config.model.inputShape; // [height, width, channels]
-        const inputTensor = tf.tensor4d(features.flat(), [1, inputShape[0], inputShape[1], inputShape[2]]);
-        const prediction = tfModel.predict(inputTensor);
-        const results = prediction.arraySync()[0];
-        
-        // Find highest probability
-        let maxProb = 0;
-        let maxIndex = 0;
-        
-        for (let i = 0; i < results.length; i++) {
-            if (results[i] > maxProb) {
-                maxProb = results[i];
-                maxIndex = i;
-            }
-        }
-        
-        // Update UI
-        currentVowel = config.labels[maxIndex] || 'unknown';
-        currentConfidence = maxProb * 100;
-        
-        vowelDetectionEl.textContent = currentVowel;
-        vowelConfidenceEl.textContent = currentConfidence.toFixed(1) + '%';
-        
-        // Clean up tensors
-        inputTensor.dispose();
-        prediction.dispose();
-        
-    }, 500); // Classify every 500ms
+    }
+    
+    // Apply confidence threshold
+    if (bestConfidence < config.detection.confidenceThreshold) {
+        bestMatch = 'noise';
+        bestConfidence = 0;
+    }
+    
+    return { vowel: bestMatch, confidence: bestConfidence };
 }
 
-// Stop TensorFlow.js classification
-function stopTensorFlowClassification() {
-    // Clear any classification intervals
-    // In this simple implementation, intervals are cleared automatically
-    console.log('Stopping TensorFlow.js classification');
+// Analyze formants and update vowel detection
+function analyzeFormants() {
+    if (!analyser || !frequencyData) return;
+    
+    // Get frequency data
+    analyser.getFloatFrequencyData(frequencyData);
+    
+    // Convert to positive values for peak detection
+    const positiveData = frequencyData.map(value => Math.max(0, value + 100));
+    
+    // Find spectral peaks
+    const peaks = findSpectralPeaks(positiveData);
+    
+    // Extract formants
+    const { F1, F2 } = extractFormants(peaks);
+    
+    // Update frequency display
+    if (F1 > 0) {
+        frequencyValueEl.textContent = `${F1.toFixed(0)} Hz (F1), ${F2.toFixed(0)} Hz (F2)`;
+    }
+    
+    // Classify vowel
+    const { vowel, confidence } = classifyVowelByFormants(F1, F2);
+    
+    // Add to history for smoothing
+    formantHistory.push({ vowel, confidence, F1, F2 });
+    if (formantHistory.length > MAX_HISTORY) {
+        formantHistory.shift();
+    }
+    
+    // Apply smoothing (average over history)
+    const smoothingWindow = Math.min(config.detection.smoothingWindow, formantHistory.length);
+    const recentHistory = formantHistory.slice(-smoothingWindow);
+    
+    // Count vowel occurrences in recent history
+    const vowelCounts = {};
+    let totalConfidence = 0;
+    
+    for (const entry of recentHistory) {
+        vowelCounts[entry.vowel] = (vowelCounts[entry.vowel] || 0) + 1;
+        totalConfidence += entry.confidence;
+    }
+    
+    // Find most frequent vowel
+    let mostFrequentVowel = 'noise';
+    let maxCount = 0;
+    
+    for (const [vowel, count] of Object.entries(vowelCounts)) {
+        if (count > maxCount) {
+            maxCount = count;
+            mostFrequentVowel = vowel;
+        }
+    }
+    
+    // Calculate average confidence for the most frequent vowel
+    const relevantEntries = recentHistory.filter(entry => entry.vowel === mostFrequentVowel);
+    const avgConfidence = relevantEntries.length > 0 
+        ? relevantEntries.reduce((sum, entry) => sum + entry.confidence, 0) / relevantEntries.length
+        : 0;
+    
+    // Update UI
+    currentVowel = mostFrequentVowel;
+    currentConfidence = avgConfidence * 100;
+    
+    vowelDetectionEl.textContent = currentVowel;
+    vowelConfidenceEl.textContent = currentConfidence.toFixed(1) + '%';
+    
+    // Debug logging (optional)
+    if (F1 > 0 && F2 > 0) {
+        console.log(`Formants: F1=${F1.toFixed(0)}Hz, F2=${F2.toFixed(0)}Hz → ${vowel} (${confidence.toFixed(2)})`);
+    }
 }
 
 // Start microphone
@@ -395,15 +404,14 @@ async function startMicrophone() {
         analyser = audioContext.createAnalyser();
         source = audioContext.createMediaStreamSource(stream);
 
-        // Configure analyser for 0.1s audio capture
-        // Calculate samples needed for configured duration
-        const duration = config.audio.duration || 0.1; // seconds
-        const samplesNeeded = Math.floor(sampleRate * duration);
-        // Use next power of 2 for fftSize
-        const fftSize = Math.pow(2, Math.ceil(Math.log2(samplesNeeded)));
+        // Configure analyser
+        const fftSize = config.audio.fftSize || 2048;
         analyser.fftSize = fftSize;
+        analyser.smoothingTimeConstant = 0.8;
+        
         const bufferLength = analyser.frequencyBinCount;
-        dataArray = new Uint8Array(bufferLength); // For visualization (getByteTimeDomainData)
+        dataArray = new Uint8Array(bufferLength); // For visualization
+        frequencyData = new Float32Array(bufferLength); // For formant analysis
 
         // Connect nodes
         source.connect(analyser);
@@ -416,11 +424,6 @@ async function startMicrophone() {
         startBtn.disabled = true;
         stopBtn.disabled = false;
         updateStatus(true, 'Microphone active. Speak vowels (A, E, I, O, U) for detection.');
-
-        // Start TensorFlow.js classification if model is ready
-        if (isModelReady) {
-            startTensorFlowClassification();
-        }
 
         console.log('Microphone started successfully');
 
@@ -455,18 +458,19 @@ function stopMicrophone() {
         animationId = null;
     }
 
-    // Stop TensorFlow.js classification
-    stopTensorFlowClassification();
-
     // Update UI
     isRecording = false;
     startBtn.disabled = false;
     stopBtn.disabled = true;
     updateStatus(false, 'Microphone stopped.');
 
-    // Reset classifier
-    tfModel = null;
-    isModelReady = false;
+    // Reset detection
+    currentVowel = '--';
+    currentConfidence = 0;
+    formantHistory = [];
+    
+    vowelDetectionEl.textContent = currentVowel;
+    vowelConfidenceEl.textContent = '--%';
 
     console.log('Microphone stopped');
 }
@@ -482,9 +486,6 @@ window.addEventListener('load', async () => {
     // Load configuration
     await loadConfig();
     
-    // Initialize TensorFlow.js model
-    await initializeTensorFlowModel();
-    
     // Try to start microphone automatically
     try {
         await startMicrophone();
@@ -497,6 +498,7 @@ window.addEventListener('load', async () => {
 // Handle page visibility changes
 document.addEventListener('visibilitychange', () => {
     if (document.hidden && isRecording) {
-        console.log('Page hidden - microphone continues recording in background');
+        console.log('Page hidden - pausing visualization');
+        // Visualization will pause automatically when animation frame stops
     }
 });
