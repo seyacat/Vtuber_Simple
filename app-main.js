@@ -127,7 +127,7 @@ function animate() {
     analyser.getByteFrequencyData(frequencyData);
     
     // Analyze fingerprint for vowel detection
-    analyzeFingerprint();
+    analyzeFingerprint(frequencyData);
     
     // Draw waveform
     drawWaveform();

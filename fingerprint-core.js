@@ -33,10 +33,10 @@ function getBandEnergy(frequencyData, minFreq, maxFreq) {
 }
 
 // Calculate 5-band fingerprint from current audio data
-function calculateFingerprint() {
+function calculateFingerprint(frequencyData) {
     if (!frequencyData || !config) return null;
     
-    const energies = config.fingerprintBands.map(band => 
+    const energies = config.fingerprintBands.map(band =>
         getBandEnergy(frequencyData, band.range[0], band.range[1])
     );
     
@@ -115,8 +115,8 @@ function logCalibrationData(vowel, fingerprint, confidence) {
 }
 
 // Analyze 5-band fingerprint and update vowel detection
-function analyzeFingerprint() {
-    const fingerprint = calculateFingerprint();
+function analyzeFingerprint(frequencyData) {
+    const fingerprint = calculateFingerprint(frequencyData);
     
     if (!fingerprint) {
         // No audio or too quiet
