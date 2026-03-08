@@ -190,14 +190,26 @@ async function startMicrophone() {
         
         console.log('Audio context created, sample rate:', config.audio.sampleRate);
         
+        // Get selected device ID from dropdown
+        const audioInputSelect = document.getElementById('audioInput');
+        const selectedDeviceId = audioInputSelect.value;
+        
+        // Build audio constraints with optional deviceId
+        const audioConstraints = {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            sampleRate: config.audio.sampleRate
+        };
+        
+        // Only add deviceId if it's not "default" (which means use default device)
+        if (selectedDeviceId && selectedDeviceId !== 'default') {
+            audioConstraints.deviceId = { exact: selectedDeviceId };
+        }
+        
         // Get microphone stream
         const stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-                echoCancellation: false,
-                noiseSuppression: false,
-                autoGainControl: false,
-                sampleRate: config.audio.sampleRate
-            }
+            audio: audioConstraints
         });
         
         console.log('Microphone stream obtained');
@@ -303,6 +315,22 @@ startBtn.addEventListener('click', startMicrophone);
 stopBtn.addEventListener('click', stopMicrophone);
 calibrateBtn.addEventListener('click', toggleCalibration);
 
+// Add event listener for device selection change
+audioInputSelect.addEventListener('change', async () => {
+    // Save selected device to localStorage
+    const selectedDeviceId = audioInputSelect.value;
+    localStorage.setItem('selectedAudioDeviceId', selectedDeviceId);
+    console.log('Saved device selection to localStorage:', selectedDeviceId);
+    
+    if (isRecording) {
+        console.log('Device changed, restarting microphone with new device...');
+        // Stop current microphone
+        stopMicrophone();
+        // Start with new device after a short delay
+        setTimeout(startMicrophone, 100);
+    }
+});
+
 // Enumerate audio devices and populate dropdown
 async function enumerateAudioDevices() {
     try {
@@ -327,6 +355,19 @@ async function enumerateAudioDevices() {
         });
         
         console.log(`Found ${audioInputs.length} audio input devices`);
+        
+        // Load saved device selection from localStorage
+        const savedDeviceId = localStorage.getItem('selectedAudioDeviceId');
+        if (savedDeviceId) {
+            // Check if the saved device exists in the current list
+            const deviceExists = audioInputs.some(device => device.deviceId === savedDeviceId);
+            if (deviceExists || savedDeviceId === 'default') {
+                audioInputSelect.value = savedDeviceId;
+                console.log('Restored saved device selection:', savedDeviceId);
+            } else {
+                console.log('Saved device not found in current devices:', savedDeviceId);
+            }
+        }
         
     } catch (error) {
         console.error('Error enumerating audio devices:', error);
