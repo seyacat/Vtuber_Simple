@@ -1,5 +1,7 @@
 // Main Application File
 // Depends on config.js and fingerprint-core.js
+import { config, loadConfig } from './config.js';
+import { analyzeFingerprint, calculateFingerprint, toggleCalibration, initCalibrationUI } from './fingerprint-core.js';
 
 // DOM Elements
 const startBtn = document.getElementById('startBtn');
@@ -13,6 +15,14 @@ const frequencyValueEl = document.getElementById('frequencyValue');
 const vowelDetectionEl = document.getElementById('vowelDetection');
 const vowelConfidenceEl = document.getElementById('vowelConfidence');
 const audioInputSelect = document.getElementById('audioInput');
+
+// Make DOM elements and functions available globally for fingerprint-core.js
+window.vowelDetectionEl = vowelDetectionEl;
+window.vowelConfidenceEl = vowelConfidenceEl;
+window.frequencyValueEl = frequencyValueEl;
+window.calibrateBtn = calibrateBtn;
+window.updateStatus = updateStatus;
+window.isRecording = isRecording;
 
 // Audio context and variables
 let audioContext;
@@ -53,61 +63,70 @@ function updateStatus(active, message) {
 
 // Draw waveform visualization
 function drawWaveform() {
-    if (!isRecording || !dataArray) return;
-    
-    // Clear canvas
-    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-    
-    // Draw background
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
-    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-    
-    // Calculate volume for visualization
-    let sum = 0;
-    for (let i = 0; i < dataArray.length; i++) {
-        const value = (dataArray[i] - 128) / 128;
-        sum += value * value;
-    }
-    const rms = Math.sqrt(sum / dataArray.length);
-    const volumeDb = 20 * Math.log10(rms + 1e-10);
-    
-    // Update volume display
-    if (volumeLevelEl) {
-        const volumePercent = Math.min(100, Math.max(0, (volumeDb + 70) * 2));
-        volumeLevelEl.textContent = volumePercent.toFixed(0) + '%';
+    if (!isRecording || !dataArray) {
+        // If not recording, schedule next frame but don't draw
+        animationId = requestAnimationFrame(drawWaveform);
+        return;
     }
     
-    // Draw waveform
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = '#00dbde';
-    ctx.beginPath();
-    
-    const sliceWidth = canvasWidth / dataArray.length;
-    let x = 0;
-    
-    for (let i = 0; i < dataArray.length; i++) {
-        const v = dataArray[i] / 128.0;
-        const y = (v * canvasHeight) / 2;
+    try {
+        // Clear canvas
+        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
         
-        if (i === 0) {
-            ctx.moveTo(x, y);
-        } else {
-            ctx.lineTo(x, y);
+        // Draw background
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+        ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+        
+        // Calculate volume for visualization
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+            const value = (dataArray[i] - 128) / 128;
+            sum += value * value;
+        }
+        const rms = Math.sqrt(sum / dataArray.length);
+        const volumeDb = 20 * Math.log10(rms + 1e-10);
+        
+        // Update volume display
+        if (volumeLevelEl) {
+            const volumePercent = Math.min(100, Math.max(0, (volumeDb + 70) * 2));
+            volumeLevelEl.textContent = volumePercent.toFixed(0) + '%';
         }
         
-        x += sliceWidth;
+        // Draw waveform
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#00dbde';
+        ctx.beginPath();
+        
+        const sliceWidth = canvasWidth / dataArray.length;
+        let x = 0;
+        
+        for (let i = 0; i < dataArray.length; i++) {
+            const v = dataArray[i] / 128.0;
+            const y = (v * canvasHeight) / 2;
+            
+            if (i === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
+            
+            x += sliceWidth;
+        }
+        
+        ctx.lineTo(canvasWidth, canvasHeight / 2);
+        ctx.stroke();
+        
+        // Draw center line
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, canvasHeight / 2);
+        ctx.lineTo(canvasWidth, canvasHeight / 2);
+        ctx.stroke();
+        
+    } catch (error) {
+        console.error('Error in drawWaveform:', error);
     }
-    
-    ctx.lineTo(canvasWidth, canvasHeight / 2);
-    ctx.stroke();
-    
-    // Draw center line
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, canvasHeight / 2);
-    ctx.lineTo(canvasWidth, canvasHeight / 2);
-    ctx.stroke();
     
     // Continue animation
     animationId = requestAnimationFrame(drawWaveform);
@@ -129,6 +148,20 @@ function animate() {
     // Analyze fingerprint for vowel detection
     analyzeFingerprint(frequencyData);
     
+    // Store current fingerprint globally for calibration capture
+    // Check if calculateFingerprint function is available (from fingerprint-core.js)
+    try {
+        if (typeof calculateFingerprint === 'function') {
+            const currentFingerprint = calculateFingerprint(frequencyData);
+            if (currentFingerprint && Array.isArray(currentFingerprint)) {
+                window.currentFingerprint = currentFingerprint;
+            }
+        }
+    } catch (error) {
+        // Silently fail - calibration will work when function is available
+        console.debug('calculateFingerprint not available yet:', error.message);
+    }
+    
     // Draw waveform
     drawWaveform();
     
@@ -138,13 +171,28 @@ function animate() {
 
 // Start microphone
 async function startMicrophone() {
-    if (isRecording) return;
+    if (isRecording) {
+        console.log('Microphone already recording');
+        return;
+    }
+    
+    console.log('Starting microphone...');
+    console.log('Config:', config);
     
     try {
+        // Check if config is available
+        if (!config || !config.audio) {
+            console.error('Configuration not loaded properly');
+            updateStatus(false, 'Configuration error. Please refresh the page.');
+            return;
+        }
+        
         // Create audio context
         audioContext = new (window.AudioContext || window.webkitAudioContext)({
             sampleRate: config.audio.sampleRate
         });
+        
+        console.log('Audio context created, sample rate:', config.audio.sampleRate);
         
         // Get microphone stream
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -155,6 +203,8 @@ async function startMicrophone() {
                 sampleRate: config.audio.sampleRate
             }
         });
+        
+        console.log('Microphone stream obtained');
         
         // Create audio source
         source = audioContext.createMediaStreamSource(stream);
@@ -181,10 +231,25 @@ async function startMicrophone() {
         animate();
         
         console.log('Microphone started successfully');
+        console.log('FFT Size:', config.audio.fftSize);
+        console.log('Frequency bins:', analyser.frequencyBinCount);
         
     } catch (error) {
         console.error('Error starting microphone:', error);
-        updateStatus(false, `Error: ${error.message}. Click "Start Microphone" to try again.`);
+        console.error('Error name:', error.name);
+        console.error('Error message:', error.message);
+        
+        let errorMessage = `Error: ${error.message}. Click "Start Microphone" to try again.`;
+        
+        if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+            errorMessage = 'Microphone permission denied. Please allow microphone access and try again.';
+        } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+            errorMessage = 'No microphone found. Please connect a microphone and try again.';
+        } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+            errorMessage = 'Microphone is in use by another application. Please close other applications using the microphone.';
+        }
+        
+        updateStatus(false, errorMessage);
         
         if (audioContext) {
             audioContext.close();
@@ -231,6 +296,36 @@ startBtn.addEventListener('click', startMicrophone);
 stopBtn.addEventListener('click', stopMicrophone);
 calibrateBtn.addEventListener('click', toggleCalibration);
 
+// Enumerate audio devices and populate dropdown
+async function enumerateAudioDevices() {
+    try {
+        // Get all audio input devices
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter(device => device.kind === 'audioinput');
+        
+        const audioInputSelect = document.getElementById('audioInput');
+        if (!audioInputSelect) return;
+        
+        // Clear existing options except the default
+        while (audioInputSelect.options.length > 1) {
+            audioInputSelect.remove(1);
+        }
+        
+        // Add each audio device as an option
+        audioInputs.forEach(device => {
+            const option = document.createElement('option');
+            option.value = device.deviceId;
+            option.text = device.label || `Microphone ${audioInputSelect.options.length}`;
+            audioInputSelect.appendChild(option);
+        });
+        
+        console.log(`Found ${audioInputs.length} audio input devices`);
+        
+    } catch (error) {
+        console.error('Error enumerating audio devices:', error);
+    }
+}
+
 // Initialize on load
 window.addEventListener('load', async () => {
     console.log('Application loading...');
@@ -238,13 +333,30 @@ window.addEventListener('load', async () => {
     // Load configuration
     await loadConfig();
     
-    // Try to start microphone automatically
-    try {
-        await startMicrophone();
-    } catch (error) {
-        console.log('Automatic microphone start failed (user may need to click start):', error.message);
-        updateStatus(false, 'Click "Start Microphone" to begin.');
-    }
+    // Enumerate audio devices
+    await enumerateAudioDevices();
+    
+    // Initialize calibration UI if function exists
+    // Use setTimeout to ensure DOM is fully ready
+    setTimeout(() => {
+        if (typeof initCalibrationUI === 'function') {
+            initCalibrationUI();
+            console.log('Calibration UI initialized');
+        }
+    }, 100);
+    
+    // Delay de 1 segundo para asegurar que todo esté listo antes de activar el micrófono
+    setTimeout(async () => {
+        console.log('Starting microphone after 1 second delay...');
+        
+        // Try to start microphone automatically
+        try {
+            await startMicrophone();
+        } catch (error) {
+            console.log('Automatic microphone start failed (user may need to click start):', error.message);
+            updateStatus(false, 'Click "Start Microphone" to begin.');
+        }
+    }, 1000);
 });
 
 // Handle page visibility changes

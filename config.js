@@ -1,5 +1,5 @@
 // Configuration - Fingerprint con 5 bandas
-let config = {
+export let config = {
     audio: {
         sampleRate: 16000,
         bufferSize: 4096,
@@ -16,13 +16,45 @@ let config = {
         { name: "B5", range: [1800, 2500] }   // Alta frecuencia (F2 alto)
     ],
     // Fingerprints de referencia para cada vocal (5 valores normalizados)
-    vowelFingerprints: {
-        "A": [0.3, 0.4, 0.2, 0.1, 0.0],  // Energía concentrada en B1-B3
-        "E": [0.1, 0.2, 0.1, 0.3, 0.3],  // Energía en B4-B5 (frecuencias altas)
-        "I": [0.0, 0.1, 0.1, 0.2, 0.6],  // Máxima energía en B5
-        "O": [0.2, 0.3, 0.4, 0.1, 0.0],  // Energía en B2-B3
-        "U": [0.4, 0.3, 0.2, 0.1, 0.0]   // Similar a A pero más en B1
-    },
+    
+  "vowelFingerprints": {
+    "A": [
+      0.509,
+      0.291,
+      0.196,
+      0.004,
+      0
+    ],
+    "E": [
+      0.828,
+      0.166,
+      0.005,
+      0,
+      0
+    ],
+    "I": [
+      0.972,
+      0.028,
+      0,
+      0,
+      0
+    ],
+    "O": [
+      0.769,
+      0.187,
+      0.043,
+      0,
+      0
+    ],
+    "U": [
+      0.795,
+      0.203,
+      0.003,
+      0,
+      0
+    ]
+  },
+
     detection: {
         confidenceThreshold: 0.12,
         smoothingWindow: 12,
@@ -33,7 +65,7 @@ let config = {
 };
 
 // Load configuration from config.json
-async function loadConfig() {
+export async function loadConfig() {
     try {
         const response = await fetch('./config.json');
         if (!response.ok) {
@@ -47,9 +79,4 @@ async function loadConfig() {
     } catch (error) {
         console.warn('Error loading config.json:', error, 'Using default configuration');
     }
-}
-
-// Export for use in other files
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { config, loadConfig };
 }

@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -9,6 +10,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/0.9.0/p5.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/0.9.0/addons/p5.dom.min.js"></script>
 </head>
+
 <body>
     <div class="container">
         <header>
@@ -27,7 +29,7 @@
                         <option value="default">Default Microphone</option>
                     </select>
                 </div>
-                
+
                 <div class="control-buttons">
                     <button id="startBtn">
                         <i class="fas fa-microphone"></i>
@@ -102,8 +104,88 @@
         </footer>
     </div>
 
-    <script src="config.js"></script>
-    <script src="fingerprint-core.js"></script>
-    <script src="app-main.js"></script>
+    <!-- Calibration Overlay -->
+    <div id="calibrationOverlay" class="calibration-overlay hidden">
+        <div class="calibration-modal">
+            <h2><i class="fas fa-sliders-h"></i> Calibración Guiada</h2>
+
+            <div class="calibration-progress">
+                <div class="vowel-indicator" data-vowel="A">
+                    <span class="vowel-letter">A</span>
+                    <div class="vowel-status"></div>
+                </div>
+                <div class="vowel-indicator" data-vowel="E">
+                    <span class="vowel-letter">E</span>
+                    <div class="vowel-status"></div>
+                </div>
+                <div class="vowel-indicator" data-vowel="I">
+                    <span class="vowel-letter">I</span>
+                    <div class="vowel-status"></div>
+                </div>
+                <div class="vowel-indicator" data-vowel="O">
+                    <span class="vowel-letter">O</span>
+                    <div class="vowel-status"></div>
+                </div>
+                <div class="vowel-indicator" data-vowel="U">
+                    <span class="vowel-letter">U</span>
+                    <div class="vowel-status"></div>
+                </div>
+            </div>
+
+            <div class="countdown-section">
+                <div class="countdown-display">
+                    <span id="countdownNumber">3</span>
+                </div>
+                <div class="current-vowel-instruction">
+                    <span id="currentVowelDisplay">A</span>
+                </div>
+                <div class="instructions">
+                    <p id="calibrationInstructions">Preparándose para capturar vocal "A"</p>
+                </div>
+            </div>
+
+            <div class="calibration-stats">
+                <div class="stat-item">
+                    <span class="stat-label">Muestras:</span>
+                    <span id="capturedSamples" class="stat-value">0/5</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Confianza:</span>
+                    <span id="currentConfidence" class="stat-value">0%</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Estado:</span>
+                    <span id="calibrationState" class="stat-value">Listo</span>
+                </div>
+            </div>
+
+            <div class="calibration-controls">
+                <button id="cancelCalibration" class="btn btn-cancel">
+                    <i class="fas fa-times"></i> Cancelar
+                </button>
+                <button id="nextVowel" class="btn btn-next" disabled>
+                    <i class="fas fa-forward"></i> Siguiente
+                </button>
+            </div>
+
+            <div class="calibration-output">
+                <h3>Datos de Calibración</h3>
+                <div class="output-container">
+                    <pre id="calibrationOutput">Esperando datos...</pre>
+                </div>
+                <div class="output-buttons">
+                    <button id="copyConfig" class="btn btn-copy" disabled>
+                        <i class="fas fa-copy"></i> Copiar Configuración
+                    </button>
+                    <button id="closeCalibration" class="btn btn-close" disabled>
+                        <i class="fas fa-check"></i> Cerrar Calibración
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="app-main.js"></script>
 </body>
+
 </html>
