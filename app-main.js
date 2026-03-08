@@ -64,8 +64,7 @@ function updateStatus(active, message) {
 // Draw waveform visualization
 function drawWaveform() {
     if (!isRecording || !dataArray) {
-        // If not recording, schedule next frame but don't draw
-        animationId = requestAnimationFrame(drawWaveform);
+        // If not recording, don't draw anything
         return;
     }
     
@@ -127,9 +126,6 @@ function drawWaveform() {
     } catch (error) {
         console.error('Error in drawWaveform:', error);
     }
-    
-    // Continue animation
-    animationId = requestAnimationFrame(drawWaveform);
 }
 
 // Animation loop for audio processing
@@ -220,6 +216,17 @@ async function startMicrophone() {
         // Create data arrays
         dataArray = new Uint8Array(analyser.fftSize);
         frequencyData = new Uint8Array(analyser.frequencyBinCount);
+        
+        // Resume audio context if suspended (required by autoplay policy)
+        if (audioContext.state === 'suspended') {
+            console.log('Audio context is suspended, attempting to resume...');
+            try {
+                await audioContext.resume();
+                console.log('Audio context resumed successfully');
+            } catch (resumeError) {
+                console.warn('Could not resume audio context:', resumeError.message);
+            }
+        }
         
         // Update UI
         isRecording = true;
