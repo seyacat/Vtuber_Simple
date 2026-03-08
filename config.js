@@ -64,19 +64,92 @@ export let config = {
     labels: ["A", "E", "I", "O", "U", "noise"]
 };
 
-// Load configuration from config.json
+// Load calibration data from localStorage
+function loadCalibrationFromLocalStorage() {
+    try {
+        const storageKey = 'vtube_calibration';
+        const calibrationData = localStorage.getItem(storageKey);
+        
+        if (!calibrationData) {
+            console.log('No calibration data found in localStorage');
+            return null;
+        }
+        
+        const parsedData = JSON.parse(calibrationData);
+        
+        // Check if we have any sessions
+        if (!parsedData.sessions || parsedData.sessions.length === 0) {
+            console.log('No calibration sessions found in localStorage');
+            return null;
+        }
+        
+        // Get the most recent session (last in array)
+        const latestSession = parsedData.sessions[parsedData.sessions.length - 1];
+        
+        if (!latestSession.vowels || Object.keys(latestSession.vowels).length === 0) {
+            console.log('No vowel data in latest calibration session');
+            return null;
+        }
+        
+        // Extract fingerprints from the latest session
+        const vowelFingerprints = {};
+        for (const [vowel, data] of Object.entries(latestSession.vowels)) {
+            if (data.fingerprint && Array.isArray(data.fingerprint) && data.fingerprint.length === 5) {
+                vowelFingerprints[vowel] = data.fingerprint;
+            }
+        }
+        
+        if (Object.keys(vowelFingerprints).length === 0) {
+            console.log('No valid fingerprints found in calibration data');
+            return null;
+        }
+        
+        console.log(`Loaded calibration data from localStorage for vowels: ${Object.keys(vowelFingerprints).join(', ')}`);
+        return { vowelFingerprints };
+        
+    } catch (error) {
+        console.error('Error loading calibration from localStorage:', error);
+        return null;
+    }
+}
+
+// Load configuration from config.json and localStorage
 export async function loadConfig() {
+    // First try to load calibration from localStorage
+    const localStorageConfig = loadCalibrationFromLocalStorage();
+    
+    // Then load from config.json
+    let fileConfig = {};
     try {
         const response = await fetch('./config.json');
-        if (!response.ok) {
+        if (response.ok) {
+            fileConfig = await response.json();
+            console.log('Configuration loaded from config.json');
+        } else {
             console.warn('Could not load config.json, using default configuration');
-            return;
         }
-        const loadedConfig = await response.json();
-        // Merge loaded config with defaults
-        config = { ...config, ...loadedConfig };
-        console.log('Configuration loaded from config.json:', config);
     } catch (error) {
         console.warn('Error loading config.json:', error, 'Using default configuration');
     }
+    
+    // Merge configurations with priority: localStorage > config.json > defaults
+    // Start with default config
+    let mergedConfig = { ...config };
+    
+    // Apply config.json overrides
+    mergedConfig = { ...mergedConfig, ...fileConfig };
+    
+    // Apply localStorage calibration overrides (only vowelFingerprints)
+    if (localStorageConfig && localStorageConfig.vowelFingerprints) {
+        // Only override vowelFingerprints from localStorage
+        mergedConfig.vowelFingerprints = {
+            ...mergedConfig.vowelFingerprints,
+            ...localStorageConfig.vowelFingerprints
+        };
+        console.log('Applied calibration data from localStorage');
+    }
+    
+    // Update global config
+    config = mergedConfig;
+    console.log('Final configuration loaded:', config);
 }

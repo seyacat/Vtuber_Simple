@@ -460,6 +460,12 @@ function processCapturedSamples() {
     // Save to localStorage
     saveCalibrationToLocalStorage(currentVowel, avgFingerprint);
     
+    // Update config immediately so calibration takes effect without page reload
+    if (config && config.vowelFingerprints) {
+        config.vowelFingerprints[currentVowel] = avgFingerprint;
+        console.log(`Config updated immediately for vowel "${currentVowel}"`);
+    }
+    
     // Update console with calibration data
     console.log(`Calibration for "${currentVowel}": [${avgFingerprint.map(v => v.toFixed(3)).join(', ')}]`);
     console.log(`Samples captured: ${guidedCalibration.capturedSamples.length}`);

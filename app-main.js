@@ -16,14 +16,6 @@ const vowelDetectionEl = document.getElementById('vowelDetection');
 const vowelConfidenceEl = document.getElementById('vowelConfidence');
 const audioInputSelect = document.getElementById('audioInput');
 
-// Make DOM elements and functions available globally for fingerprint-core.js
-window.vowelDetectionEl = vowelDetectionEl;
-window.vowelConfidenceEl = vowelConfidenceEl;
-window.frequencyValueEl = frequencyValueEl;
-window.calibrateBtn = calibrateBtn;
-window.updateStatus = updateStatus;
-window.isRecording = isRecording;
-
 // Audio context and variables
 let audioContext;
 let analyser;
@@ -32,6 +24,14 @@ let dataArray;
 let frequencyData;
 let animationId;
 let isRecording = false;
+
+// Make DOM elements and functions available globally for fingerprint-core.js
+window.vowelDetectionEl = vowelDetectionEl;
+window.vowelConfidenceEl = vowelConfidenceEl;
+window.frequencyValueEl = frequencyValueEl;
+window.calibrateBtn = calibrateBtn;
+window.updateStatus = updateStatus;
+window.isRecording = isRecording;
 
 // Canvas setup
 const ctx = canvas.getContext('2d');
