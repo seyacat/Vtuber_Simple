@@ -1,7 +1,8 @@
 // Main Application File
-// Depends on config.js and fingerprint-core.js
+// Main Application File
+// Depends on config.js and lpc-core.js
 import { config, loadConfig } from './config.js';
-import { analyzeFingerprint, calculateFingerprint, toggleCalibration, initCalibrationUI } from './fingerprint-core.js';
+import { analyzeFrame, toggleCalibration, initCalibrationUI } from './lpc-core.js';
 
 // DOM Elements
 const startBtn = document.getElementById('startBtn');
@@ -25,7 +26,7 @@ let frequencyData;
 let animationId;
 let isRecording = false;
 
-// Make DOM elements and functions available globally for fingerprint-core.js
+// Make DOM elements and functions available globally for lpc-core.js
 window.vowelDetectionEl = vowelDetectionEl;
 window.vowelConfidenceEl = vowelConfidenceEl;
 window.frequencyValueEl = frequencyValueEl;
@@ -138,28 +139,14 @@ function animate() {
     // Get time domain data for waveform
     analyser.getByteTimeDomainData(dataArray);
     
-    // Get frequency data for fingerprint analysis
-    analyser.getByteFrequencyData(frequencyData);
+    // Get time domain data for waveform and LPC analysis
+    analyser.getFloatTimeDomainData(frequencyData);
     
-    // Analyze fingerprint for vowel detection
-    analyzeFingerprint(frequencyData);
-    
-    // Store current fingerprint globally for calibration capture
-    // Check if calculateFingerprint function is available (from fingerprint-core.js)
-    try {
-        if (typeof calculateFingerprint === 'function') {
-            const currentFingerprint = calculateFingerprint(frequencyData);
-            if (currentFingerprint && Array.isArray(currentFingerprint)) {
-                window.currentFingerprint = currentFingerprint;
-            }
-        }
-    } catch (error) {
-        // Silently fail - calibration will work when function is available
-        console.debug('calculateFingerprint not available yet:', error.message);
-    }
-    
-    // Store current frequency data globally for dynamic band calibration
-    window.currentFrequencyData = frequencyData;
+    // Convert for the waveform visualizer
+    analyser.getByteTimeDomainData(dataArray);
+
+    // Analyze using LPC
+    analyzeFrame(frequencyData, audioContext.sampleRate);
     
     // Draw waveform
     drawWaveform();
@@ -199,9 +186,9 @@ async function startMicrophone() {
         
         // Build audio constraints with optional deviceId
         const audioConstraints = {
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true, // Activado para normalizar micrófonos débiles automáticamente
             sampleRate: config.audio.sampleRate
         };
         
@@ -220,17 +207,22 @@ async function startMicrophone() {
         // Create audio source
         source = audioContext.createMediaStreamSource(stream);
         
+        // Agregar Booster de volumen vía Software (x5) para micrófonos débiles
+        const gainNode = audioContext.createGain();
+        gainNode.gain.value = 5.0;
+        
         // Create analyser
         analyser = audioContext.createAnalyser();
         analyser.fftSize = config.audio.fftSize;
         analyser.smoothingTimeConstant = 0.8;
         
         // Connect nodes
-        source.connect(analyser);
+        source.connect(gainNode);
+        gainNode.connect(analyser);
         
         // Create data arrays
         dataArray = new Uint8Array(analyser.fftSize);
-        frequencyData = new Uint8Array(analyser.frequencyBinCount);
+        frequencyData = new Float32Array(analyser.fftSize);
         
         // Resume audio context if suspended (required by autoplay policy)
         if (audioContext.state === 'suspended') {
@@ -386,13 +378,11 @@ window.addEventListener('load', async () => {
     
     // Enumerate audio devices
     await enumerateAudioDevices();
-    
-    // Initialize calibration UI if function exists
-    // Use setTimeout to ensure DOM is fully ready
+
+    // Initialize calibration UI
     setTimeout(() => {
         if (typeof initCalibrationUI === 'function') {
             initCalibrationUI();
-            console.log('Calibration UI initialized');
         }
     }, 100);
     
