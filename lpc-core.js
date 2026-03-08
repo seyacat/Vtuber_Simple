@@ -78,9 +78,9 @@ if (typeof window !== 'undefined') {
 export function computeLPC(timeData, order) {
     const n = timeData.length;
     
-    // Filtro Pre-emphasis (alpha = 0.90 para acentuar formantes sobre el murmullo de fondo)
+    // Filtro Pre-emphasis (0.50 es el estándar equilibrado para 16kHz para no matar graves de la O y U)
     const preEmphasized = new Float32Array(n);
-    const alpha = 0.90; 
+    const alpha = 0.50; 
     preEmphasized[0] = timeData[0];
     for (let i = 1; i < n; i++) {
         preEmphasized[i] = timeData[i] - alpha * timeData[i - 1];
@@ -152,8 +152,9 @@ export function detectFormantsLPC(timeData, sampleRate, order = 12) {
         spectrum[w] = 1.0 / Math.sqrt(re * re + im * im);
     }
     
-    // Buscar picos locales en el espectro
+    // Buscar picos locales verdaderos en el espectro
     for (let w = 1; w < numBins - 1; w++) {
+        // Encontrar pico local simple
         if (spectrum[w] > spectrum[w - 1] && spectrum[w] > spectrum[w + 1]) {
             const freq = (w / numBins) * (sampleRate / 2);
             // Formantes típicos de la voz humana están entre 200Hz y 4000Hz
@@ -163,14 +164,31 @@ export function detectFormantsLPC(timeData, sampleRate, order = 12) {
         }
     }
     
-    // Ordenar SOLO por frecuencia. Los formantes reales son simplemente 
-    // las resonancias a medida que subimos en el espectro (F1 es la 1ra acústica, F2 la 2da).
-    formants.sort((a, b) => a.freq - b.freq);
+    // Si no detectó suficientes formantes prominentes por falta de voz, devolver vacíos
+    if (formants.length === 0) {
+        return { F1: 0, F2: 0, F3: 0 };
+    }
+
+    // Encontrar cuál es la resonancia más fuerte de nuestra voz
+    let maxAmp = 0;
+    for (let i = 0; i < formants.length; i++) {
+        if (formants[i].amplitude > maxAmp) {
+            maxAmp = formants[i].amplitude;
+        }
+    }
+
+    // Filtrar la pequeña "basura algorítmica y de estática del micrófono"
+    // Solo aceptaremos formantes que tengan al menos el 15% del volumen de la resonancia principal
+    const cleanFormants = formants.filter(f => f.amplitude > maxAmp * 0.15);
+    
+    // ORDENAR ESOS PICOS PRINCIPALES DE GRAVE A AGUDO ESTRÍCTAMENTE
+    // F1 siempre será el armónico grave potente de las cuerdas, F2 el de la lengua
+    cleanFormants.sort((a, b) => a.freq - b.freq);
 
     return {
-        F1: formants.length > 0 ? formants[0].freq : 0,
-        F2: formants.length > 1 ? formants[1].freq : 0,
-        F3: formants.length > 2 ? formants[2].freq : 0
+        F1: cleanFormants.length > 0 ? cleanFormants[0].freq : 0,
+        F2: cleanFormants.length > 1 ? cleanFormants[1].freq : 0,
+        F3: cleanFormants.length > 2 ? cleanFormants[2].freq : 0
     };
 }
 
@@ -275,9 +293,9 @@ export function analyzeFrame(timeData, sampleRate) {
         return; // silencio total
     }
 
-    // Usar Order 24 para micrófonos 16kHz analizando TODO el buffer (4096 frames = ~256ms)
-    // para estar 100% seguros de que capturamos las super bajas frecuencias de la O y la U
-    const formants = detectFormantsLPC(normalizedData, sampleRate, 24);
+    // Usar Order 18 lógico: La regla científica estándar del LPC para 16kHz es (SampleRate/1000) + 2 = 18.
+    // Order 24 fundía F1/F2 en uno solo.
+    const formants = detectFormantsLPC(normalizedData, sampleRate, 18);
     
     // Si estamos en proceso de capturar calibración, guardamos y salimos aquí.
     if (guidedCalibration.active && guidedCalibration.state === 'capturing') {
