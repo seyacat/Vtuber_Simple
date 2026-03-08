@@ -17,43 +17,52 @@ export let config = {
     ],
     // Fingerprints de referencia para cada vocal (5 valores normalizados)
     
-  "vowelFingerprints": {
-    "A": [
-      0.509,
-      0.291,
-      0.196,
-      0.004,
-      0
-    ],
-    "E": [
-      0.828,
-      0.166,
-      0.005,
-      0,
-      0
-    ],
-    "I": [
-      0.972,
-      0.028,
-      0,
-      0,
-      0
-    ],
-    "O": [
-      0.769,
-      0.187,
-      0.043,
-      0,
-      0
-    ],
-    "U": [
-      0.795,
-      0.203,
-      0.003,
-      0,
-      0
-    ]
-  },
+    "vowelFingerprints": {
+      "A": [0.290, 0.257, 0.227, 0.219, 0.006],
+      "E": [0.411, 0.347, 0.046, 0.042, 0.154],
+      "I": [0.657, 0.235, 0.000, 0.000, 0.108],
+      "O": [0.393, 0.355, 0.252, 0.000, 0.000],
+      "U": [0.525, 0.392, 0.083, 0.000, 0.000]
+    },
+
+    // Dynamic bands for each vowel (populated from calibration)
+    vowelDynamicBands: {
+        "A": [
+            { name: "B1", range: [195, 345], centerFreq: 270, expectedEnergy: 0.338 },
+            { name: "B2", range: [468, 618], centerFreq: 543, expectedEnergy: 0.161 },
+            { name: "B3", range: [1124, 1274], centerFreq: 1199, expectedEnergy: 0.076 },
+            { name: "B4", range: [1398, 1548], centerFreq: 1473, expectedEnergy: 0.001 },
+            { name: "B5", range: [2738, 2888], centerFreq: 2813, expectedEnergy: 0.002 }
+        ],
+        "E": [
+            { name: "B1", range: [202, 352], centerFreq: 277, expectedEnergy: 0.324 },
+            { name: "B2", range: [343, 493], centerFreq: 418, expectedEnergy: 0.156 },
+            { name: "B3", range: [890, 1040], centerFreq: 965, expectedEnergy: 0.001 },
+            { name: "B4", range: [1851, 2001], centerFreq: 1926, expectedEnergy: 0.003 },
+            { name: "B5", range: [1995, 2145], centerFreq: 2070, expectedEnergy: 0.007 }
+        ],
+        "I": [
+            { name: "B1", range: [202, 352], centerFreq: 277, expectedEnergy: 0.329 },
+            { name: "B2", range: [339, 489], centerFreq: 414, expectedEnergy: 0.023 },
+            { name: "B3", range: [722, 872], centerFreq: 797, expectedEnergy: 0.200 },
+            { name: "B4", range: [1323, 1473], centerFreq: 1398, expectedEnergy: 0.200 },
+            { name: "B5", range: [2702, 2852], centerFreq: 2777, expectedEnergy: 0.002 }
+        ],
+        "O": [
+            { name: "B1", range: [198, 348], centerFreq: 273, expectedEnergy: 0.348 },
+            { name: "B2", range: [335, 485], centerFreq: 410, expectedEnergy: 0.245 },
+            { name: "B3", range: [745, 895], centerFreq: 820, expectedEnergy: 0.082 },
+            { name: "B4", range: [1323, 1473], centerFreq: 1398, expectedEnergy: 0.200 },
+            { name: "B5", range: [1925, 2075], centerFreq: 2000, expectedEnergy: 0.200 }
+        ],
+        "U": [
+            { name: "B1", range: [198, 348], centerFreq: 273, expectedEnergy: 0.347 },
+            { name: "B2", range: [335, 485], centerFreq: 410, expectedEnergy: 0.127 },
+            { name: "B3", range: [741, 891], centerFreq: 816, expectedEnergy: 0.002 },
+            { name: "B4", range: [1323, 1473], centerFreq: 1398, expectedEnergy: 0.200 },
+            { name: "B5", range: [1925, 2075], centerFreq: 2000, expectedEnergy: 0.200 }
+        ]
+    },
 
     detection: {
         confidenceThreshold: 0.12,
@@ -91,11 +100,24 @@ function loadCalibrationFromLocalStorage() {
             return null;
         }
         
-        // Extract fingerprints from the latest session
+        // Extract fingerprints and dynamic bands from the latest session
         const vowelFingerprints = {};
+        const vowelDynamicBands = {};
+        
         for (const [vowel, data] of Object.entries(latestSession.vowels)) {
+            // Load fingerprints
             if (data.fingerprint && Array.isArray(data.fingerprint) && data.fingerprint.length === 5) {
                 vowelFingerprints[vowel] = data.fingerprint;
+            }
+            
+            // Load dynamic bands (version 2.0+)
+            if (data.dynamicBands && Array.isArray(data.dynamicBands) && data.dynamicBands.length === 5) {
+                vowelDynamicBands[vowel] = data.dynamicBands.map(band => ({
+                    name: band.name || `B${data.dynamicBands.indexOf(band) + 1}`,
+                    range: band.range,
+                    centerFreq: band.centerFreq || (band.range[0] + band.range[1]) / 2,
+                    expectedEnergy: band.expectedEnergy || 0.2
+                }));
             }
         }
         
@@ -105,7 +127,16 @@ function loadCalibrationFromLocalStorage() {
         }
         
         console.log(`Loaded calibration data from localStorage for vowels: ${Object.keys(vowelFingerprints).join(', ')}`);
-        return { vowelFingerprints };
+        
+        const result = { vowelFingerprints };
+        
+        // Only include dynamic bands if we have them
+        if (Object.keys(vowelDynamicBands).length > 0) {
+            result.vowelDynamicBands = vowelDynamicBands;
+            console.log(`Also loaded dynamic bands for vowels: ${Object.keys(vowelDynamicBands).join(', ')}`);
+        }
+        
+        return result;
         
     } catch (error) {
         console.error('Error loading calibration from localStorage:', error);
@@ -139,17 +170,39 @@ export async function loadConfig() {
     // Apply config.json overrides
     mergedConfig = { ...mergedConfig, ...fileConfig };
     
-    // Apply localStorage calibration overrides (only vowelFingerprints)
-    if (localStorageConfig && localStorageConfig.vowelFingerprints) {
-        // Only override vowelFingerprints from localStorage
-        mergedConfig.vowelFingerprints = {
-            ...mergedConfig.vowelFingerprints,
-            ...localStorageConfig.vowelFingerprints
-        };
-        console.log('Applied calibration data from localStorage');
+    // Apply localStorage calibration overrides
+    if (localStorageConfig) {
+        // Override vowelFingerprints from localStorage
+        if (localStorageConfig.vowelFingerprints) {
+            mergedConfig.vowelFingerprints = {
+                ...mergedConfig.vowelFingerprints,
+                ...localStorageConfig.vowelFingerprints
+            };
+            console.log('Applied vowel fingerprints from localStorage');
+        }
+        
+        // Override vowelDynamicBands from localStorage
+        if (localStorageConfig.vowelDynamicBands) {
+            if (!mergedConfig.vowelDynamicBands) {
+                mergedConfig.vowelDynamicBands = {};
+            }
+            mergedConfig.vowelDynamicBands = {
+                ...mergedConfig.vowelDynamicBands,
+                ...localStorageConfig.vowelDynamicBands
+            };
+            console.log('Applied dynamic bands from localStorage');
+        }
     }
     
     // Update global config
     config = mergedConfig;
     console.log('Final configuration loaded:', config);
+    
+    // Log dynamic bands info if available
+    if (config.vowelDynamicBands && Object.keys(config.vowelDynamicBands).length > 0) {
+        console.log('Dynamic bands available for vowels:', Object.keys(config.vowelDynamicBands).join(', '));
+        Object.entries(config.vowelDynamicBands).forEach(([vowel, bands]) => {
+            console.log(`  ${vowel}: ${bands.map(b => `${b.range[0]}-${b.range[1]}Hz`).join(', ')}`);
+        });
+    }
 }

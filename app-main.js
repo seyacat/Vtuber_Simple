@@ -158,6 +158,9 @@ function animate() {
         console.debug('calculateFingerprint not available yet:', error.message);
     }
     
+    // Store current frequency data globally for dynamic band calibration
+    window.currentFrequencyData = frequencyData;
+    
     // Draw waveform
     drawWaveform();
     
