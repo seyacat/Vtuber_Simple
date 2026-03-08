@@ -10,24 +10,38 @@ const vowelDetectionEl = document.getElementById('vowelDetection');
 const vowelConfidenceEl = document.getElementById('vowelConfidence');
 const audioInputSelect = document.getElementById('audioInput');
 
-// Configuration
+// Configuration - Fingerprint con 5 bandas
 let config = {
-    audio: { sampleRate: 16000, bufferSize: 2048, fftSize: 2048, minFrequency: 80, maxFrequency: 4000 },
-    formants: {
-        A: { F1: [700, 900], F2: [1100, 1300] },
-        E: { F1: [400, 600], F2: [1700, 2100] },
-        I: { F1: [250, 350], F2: [2100, 2500] },
-        O: { F1: [400, 600], F2: [800, 1000] },
-        U: { F1: [250, 350], F2: [600, 900] }
+    audio: {
+        sampleRate: 16000,
+        bufferSize: 4096,
+        fftSize: 4096,
+        minFrequency: 80,
+        maxFrequency: 3000
+    },
+    // 5 bandas de frecuencia para fingerprint de alta resolución
+    fingerprintBands: [
+        { name: "B1", range: [200, 400] },    // Muy baja frecuencia (F1 bajo)
+        { name: "B2", range: [400, 800] },    // Baja frecuencia (F1 medio-alto)
+        { name: "B3", range: [800, 1200] },   // Frecuencia media (F2 bajo)
+        { name: "B4", range: [1200, 1800] },  // Frecuencia media-alta (F2 medio)
+        { name: "B5", range: [1800, 2500] }   // Alta frecuencia (F2 alto)
+    ],
+    // Fingerprints de referencia para cada vocal (5 valores normalizados)
+    vowelFingerprints: {
+        "A": [0.3, 0.4, 0.2, 0.1, 0.0],  // Energía concentrada en B1-B3
+        "E": [0.1, 0.2, 0.1, 0.3, 0.3],  // Energía en B4-B5 (frecuencias altas)
+        "I": [0.0, 0.1, 0.1, 0.2, 0.6],  // Máxima energía en B5
+        "O": [0.2, 0.3, 0.4, 0.1, 0.0],  // Energía en B2-B3
+        "U": [0.4, 0.3, 0.2, 0.1, 0.0]   // Similar a A pero más en B1
     },
     detection: {
-        confidenceThreshold: 0.7,
-        smoothingWindow: 5,
-        minVolumeDb: -40,
-        peakThreshold: 0.3,
-        formantSearchRange: { F1: [200, 1000], F2: [500, 3000] }
+        confidenceThreshold: 0.12,
+        smoothingWindow: 12,
+        minVolumeDb: -70,
+        noiseFloor: 0.005
     },
-    labels: ['A', 'E', 'I', 'O', 'U', 'noise']
+    labels: ["A", "E", "I", "O", "U", "noise"]
 };
 
 // Load configuration from config.json
@@ -56,11 +70,11 @@ let frequencyData;
 let animationId;
 let isRecording = false;
 
-// Formant detection variables
+// Fingerprint detection variables
 let currentVowel = '--';
 let currentConfidence = 0;
-let formantHistory = [];
-const MAX_HISTORY = 10;
+let fingerprintHistory = [];
+const MAX_HISTORY = 20;
 
 // Canvas setup
 const ctx = canvas.getContext('2d');
@@ -165,9 +179,9 @@ function drawWaveform() {
     ctx.lineTo(canvasWidth, canvasHeight / 2);
     ctx.stroke();
 
-    // Perform formant analysis if volume is above threshold
+    // Perform fingerprint analysis if volume is above threshold
     if (db > config.detection.minVolumeDb) {
-        analyzeFormants();
+        analyzeFingerprint();
     } else {
         // If volume is too low, reset detection
         currentVowel = '--';
@@ -180,165 +194,115 @@ function drawWaveform() {
     animationId = requestAnimationFrame(drawWaveform);
 }
 
-// Find spectral peaks in frequency data
-function findSpectralPeaks(frequencyData) {
-    const peaks = [];
-    const peakThreshold = config.detection.peakThreshold || 0.1; // Lower threshold
+// Calculate energy in a frequency band
+function getBandEnergy(frequencyData, minFreq, maxFreq) {
+    if (!analyser || !frequencyData) return 0;
     
-    // Convert from dB to linear scale for better peak detection
-    const linearData = frequencyData.map(value => Math.pow(10, value / 20));
+    const freqPerBin = audioContext.sampleRate / analyser.fftSize;
+    const startBin = Math.floor(minFreq / freqPerBin);
+    const endBin = Math.floor(maxFreq / freqPerBin);
     
-    // Normalize frequency data
-    const maxValue = Math.max(...linearData);
-    if (maxValue === 0) return peaks;
+    let energy = 0;
+    let count = 0;
     
-    const normalizedData = linearData.map(value => value / maxValue);
-    
-    // Apply simple smoothing (3-point moving average)
-    const smoothedData = [];
-    for (let i = 0; i < normalizedData.length; i++) {
-        const prev = i > 0 ? normalizedData[i - 1] : normalizedData[i];
-        const next = i < normalizedData.length - 1 ? normalizedData[i + 1] : normalizedData[i];
-        smoothedData[i] = (prev + normalizedData[i] + next) / 3;
-    }
-    
-    // Find local maxima with wider window for better detection
-    for (let i = 2; i < smoothedData.length - 2; i++) {
-        if (smoothedData[i] > smoothedData[i - 1] &&
-            smoothedData[i] > smoothedData[i + 1] &&
-            smoothedData[i] > smoothedData[i - 2] &&
-            smoothedData[i] > smoothedData[i + 2] &&
-            smoothedData[i] > peakThreshold) {
-            
-            // Convert bin index to frequency
-            const frequency = i * audioContext.sampleRate / analyser.fftSize;
-            
-            // Only consider frequencies in human speech range
-            if (frequency >= config.audio.minFrequency && frequency <= config.audio.maxFrequency) {
-                peaks.push({
-                    frequency: frequency,
-                    amplitude: smoothedData[i],
-                    rawAmplitude: frequencyData[i]
-                });
-            }
+    for (let i = startBin; i <= endBin && i < frequencyData.length; i++) {
+        // Convert dB to linear energy (skip -Infinity values)
+        if (frequencyData[i] > -100) {
+            const linearValue = Math.pow(10, frequencyData[i] / 20);
+            energy += linearValue;
+            count++;
         }
     }
     
-    // Sort by amplitude (highest first)
-    peaks.sort((a, b) => b.amplitude - a.amplitude);
-    
-    return peaks;
+    return count > 0 ? energy / count : 0;
 }
 
-// Extract formant frequencies (F1 and F2) from spectral peaks
-function extractFormants(peaks) {
-    if (peaks.length < 2) return { F1: 0, F2: 0 };
-    
-    // The first formant (F1) is typically the lowest strong peak
-    // The second formant (F2) is the next strong peak above F1
-    
-    let F1 = 0;
-    let F2 = 0;
-    
-    // Sort peaks by frequency
-    const sortedPeaks = [...peaks].sort((a, b) => a.frequency - b.frequency);
-    
-    // Find F1 in the lower frequency range (200-1000 Hz)
-    const F1Range = config.detection.formantSearchRange.F1 || [200, 1000];
-    const F1Candidates = sortedPeaks.filter(p => p.frequency >= F1Range[0] && p.frequency <= F1Range[1]);
-    
-    if (F1Candidates.length > 0) {
-        // Take the strongest peak in F1 range
-        F1Candidates.sort((a, b) => b.amplitude - a.amplitude);
-        F1 = F1Candidates[0].frequency;
-    }
-    
-    // Find F2 in the higher frequency range (500-3000 Hz)
-    const F2Range = config.detection.formantSearchRange.F2 || [500, 3000];
-    const F2Candidates = sortedPeaks.filter(p => p.frequency >= F2Range[0] && p.frequency <= F2Range[1] && p.frequency > F1 + 100);
-    
-    if (F2Candidates.length > 0) {
-        // Take the strongest peak in F2 range
-        F2Candidates.sort((a, b) => b.amplitude - a.amplitude);
-        F2 = F2Candidates[0].frequency;
-    }
-    
-    return { F1, F2 };
-}
-
-// Classify vowel based on formant frequencies
-function classifyVowelByFormants(F1, F2) {
-    if (F1 === 0 || F2 === 0) return { vowel: 'noise', confidence: 0 };
-    
-    let bestMatch = 'noise';
-    let bestConfidence = 0;
-    
-    // Check each vowel's formant ranges
-    for (const vowel of ['A', 'E', 'I', 'O', 'U']) {
-        const ranges = config.formants[vowel];
-        if (!ranges) continue;
-        
-        const [F1min, F1max] = ranges.F1;
-        const [F2min, F2max] = ranges.F2;
-        
-        // Calculate how close F1 and F2 are to the ideal ranges
-        const F1Distance = Math.max(0, Math.abs((F1 - (F1min + F1max) / 2) / ((F1max - F1min) / 2)));
-        const F2Distance = Math.max(0, Math.abs((F2 - (F2min + F2max) / 2) / ((F2max - F2min) / 2)));
-        
-        // Combined distance (lower is better)
-        const distance = Math.sqrt(F1Distance * F1Distance + F2Distance * F2Distance);
-        
-        // Convert distance to confidence (0-1)
-        const confidence = Math.max(0, 1 - distance / 2);
-        
-        if (confidence > bestConfidence) {
-            bestConfidence = confidence;
-            bestMatch = vowel;
-        }
-    }
-    
-    // Apply confidence threshold
-    if (bestConfidence < config.detection.confidenceThreshold) {
-        bestMatch = 'noise';
-        bestConfidence = 0;
-    }
-    
-    return { vowel: bestMatch, confidence: bestConfidence };
-}
-
-// Analyze formants and update vowel detection
-function analyzeFormants() {
-    if (!analyser || !frequencyData) return;
+// Calculate fingerprint (normalized energy in each of 5 bands)
+function calculateFingerprint() {
+    if (!analyser || !frequencyData) return null;
     
     // Get frequency data
     analyser.getFloatFrequencyData(frequencyData);
     
-    // Convert to positive values for peak detection
-    const positiveData = frequencyData.map(value => Math.max(0, value + 100));
+    // Calculate energy in each of the 5 bands
+    const bandEnergies = [];
+    let totalEnergy = 0;
     
-    // Find spectral peaks
-    const peaks = findSpectralPeaks(positiveData);
-    
-    // Extract formants
-    const { F1, F2 } = extractFormants(peaks);
-    
-    // Update frequency display
-    if (F1 > 0) {
-        frequencyValueEl.textContent = `${F1.toFixed(0)} Hz (F1), ${F2.toFixed(0)} Hz (F2)`;
+    for (const band of config.fingerprintBands) {
+        const [minFreq, maxFreq] = band.range;
+        const energy = getBandEnergy(frequencyData, minFreq, maxFreq);
+        bandEnergies.push(energy);
+        totalEnergy += energy;
     }
     
-    // Classify vowel
-    const { vowel, confidence } = classifyVowelByFormants(F1, F2);
+    // Normalize to get fingerprint (sum = 1)
+    if (totalEnergy > config.detection.noiseFloor) {
+        const fingerprint = bandEnergies.map(energy => energy / totalEnergy);
+        return fingerprint;
+    }
+    
+    return null; // Too quiet
+}
+
+// Classify vowel based on 5-band fingerprint
+function classifyVowelByFingerprint(fingerprint) {
+    if (!fingerprint || fingerprint.length !== 5) return { vowel: 'noise', confidence: 0 };
+    
+    let bestMatch = 'noise';
+    let bestDistance = Infinity;
+    
+    // Compare with each reference fingerprint (5 values each)
+    for (const [vowel, refFingerprint] of Object.entries(config.vowelFingerprints)) {
+        // Calculate Euclidean distance between 5-dimensional vectors
+        let distance = 0;
+        for (let i = 0; i < 5; i++) {
+            distance += Math.pow(fingerprint[i] - refFingerprint[i], 2);
+        }
+        distance = Math.sqrt(distance);
+        
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            bestMatch = vowel;
+        }
+    }
+    
+    // Convert distance to confidence (0-1)
+    // Max possible distance with normalized 5D vectors is ~√2 ≈ 1.414
+    const confidence = Math.max(0, 1 - (bestDistance / 1.414));
+    
+    // Apply confidence threshold
+    if (confidence < config.detection.confidenceThreshold) {
+        return { vowel: 'noise', confidence: 0 };
+    }
+    
+    return { vowel: bestMatch, confidence: confidence };
+}
+
+// Analyze 5-band fingerprint and update vowel detection
+function analyzeFingerprint() {
+    const fingerprint = calculateFingerprint();
+    
+    if (!fingerprint) {
+        // No audio or too quiet
+        currentVowel = '--';
+        currentConfidence = 0;
+        vowelDetectionEl.textContent = currentVowel;
+        vowelConfidenceEl.textContent = '--%';
+        return;
+    }
+    
+    // Classify vowel using 5-band fingerprint
+    const { vowel, confidence } = classifyVowelByFingerprint(fingerprint);
     
     // Add to history for smoothing
-    formantHistory.push({ vowel, confidence, F1, F2 });
-    if (formantHistory.length > MAX_HISTORY) {
-        formantHistory.shift();
+    fingerprintHistory.push({ vowel, confidence, fingerprint });
+    if (fingerprintHistory.length > MAX_HISTORY) {
+        fingerprintHistory.shift();
     }
     
-    // Apply smoothing (average over history)
-    const smoothingWindow = Math.min(config.detection.smoothingWindow, formantHistory.length);
-    const recentHistory = formantHistory.slice(-smoothingWindow);
+    // Apply smoothing (majority vote over recent history)
+    const smoothingWindow = Math.min(config.detection.smoothingWindow, fingerprintHistory.length);
+    const recentHistory = fingerprintHistory.slice(-smoothingWindow);
     
     // Count vowel occurrences in recent history
     const vowelCounts = {};
@@ -373,10 +337,47 @@ function analyzeFormants() {
     vowelDetectionEl.textContent = currentVowel;
     vowelConfidenceEl.textContent = currentConfidence.toFixed(1) + '%';
     
-    // Debug logging (optional)
-    if (F1 > 0 && F2 > 0) {
-        console.log(`Formants: F1=${F1.toFixed(0)}Hz, F2=${F2.toFixed(0)}Hz → ${vowel} (${confidence.toFixed(2)})`);
+    // Update frequency display with fingerprint values (show top 3 bands)
+    const bandValues = fingerprint.map((val, i) => {
+        const band = config.fingerprintBands[i];
+        return `${band.name}:${(val*100).toFixed(0)}%`;
+    }).join(' ');
+    
+    frequencyValueEl.textContent = bandValues;
+    
+    // Debug logging for significant detections
+    if (confidence > 0.25) {
+        const fingerprintStr = fingerprint.map(v => v.toFixed(2)).join(', ');
+        console.log(`5-Band Fingerprint: [${fingerprintStr}] → ${vowel} (${confidence.toFixed(2)})`);
     }
+}
+
+// Calibration mode - log fingerprint values for tuning
+let calibrationMode = false;
+function toggleCalibration() {
+    calibrationMode = !calibrationMode;
+    console.log(`Calibration mode: ${calibrationMode ? 'ON' : 'OFF'}`);
+    if (calibrationMode) {
+        console.log('Speak vowels clearly. The system will log 5-band fingerprint values for tuning.');
+        console.log('Current 5-band reference fingerprints:', config.vowelFingerprints);
+    }
+}
+
+// Enhanced calibration logging
+function logCalibrationData(vowel, fingerprint, confidence) {
+    if (!calibrationMode || confidence < 0.3) return;
+    
+    console.log(`CALIBRATION for "${vowel}":`);
+    console.log(`  Fingerprint: [${fingerprint.map(v => v.toFixed(3)).join(', ')}]`);
+    console.log(`  Confidence: ${(confidence*100).toFixed(1)}%`);
+    
+    // Suggest updated fingerprint
+    const currentRef = config.vowelFingerprints[vowel] || [0,0,0,0,0];
+    const suggested = fingerprint.map((val, i) => 
+        (currentRef[i] * 0.7 + val * 0.3).toFixed(3) // Blend 70% old, 30% new
+    );
+    
+    console.log(`  Suggested update for "${vowel}": [${suggested.join(', ')}]`);
 }
 
 // Start microphone
@@ -405,13 +406,13 @@ async function startMicrophone() {
         source = audioContext.createMediaStreamSource(stream);
 
         // Configure analyser
-        const fftSize = config.audio.fftSize || 2048;
+        const fftSize = config.audio.fftSize || 4096;
         analyser.fftSize = fftSize;
-        analyser.smoothingTimeConstant = 0.8;
+        analyser.smoothingTimeConstant = 0.2; // Very little smoothing for fast response
         
         const bufferLength = analyser.frequencyBinCount;
         dataArray = new Uint8Array(bufferLength); // For visualization
-        frequencyData = new Float32Array(bufferLength); // For formant analysis
+        frequencyData = new Float32Array(bufferLength); // For fingerprint analysis
 
         // Connect nodes
         source.connect(analyser);
@@ -423,9 +424,11 @@ async function startMicrophone() {
         isRecording = true;
         startBtn.disabled = true;
         stopBtn.disabled = false;
-        updateStatus(true, 'Microphone active. Speak vowels (A, E, I, O, U) for detection.');
+        updateStatus(true, 'Microphone active. Speak vowels (A, E, I, O, U) for 5-band detection.');
 
-        console.log('Microphone started successfully');
+        console.log('Microphone started with 5-band fingerprint system');
+        console.log(`Audio configured: sampleRate=${sampleRate}, fftSize=${fftSize}`);
+        console.log(`5 frequency bands: ${config.fingerprintBands.map(b => `${b.range[0]}-${b.range[1]}Hz`).join(', ')}`);
 
     } catch (error) {
         console.error('Error accessing microphone:', error);
@@ -467,7 +470,7 @@ function stopMicrophone() {
     // Reset detection
     currentVowel = '--';
     currentConfidence = 0;
-    formantHistory = [];
+    fingerprintHistory = [];
     
     vowelDetectionEl.textContent = currentVowel;
     vowelConfidenceEl.textContent = '--%';

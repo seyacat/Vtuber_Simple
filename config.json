@@ -1,27 +1,30 @@
 {
   "audio": {
     "sampleRate": 16000,
-    "bufferSize": 2048,
-    "fftSize": 2048,
+    "bufferSize": 4096,
+    "fftSize": 4096,
     "minFrequency": 80,
-    "maxFrequency": 4000
+    "maxFrequency": 3000
   },
-  "formants": {
-    "A": { "F1": [700, 900], "F2": [1100, 1300] },
-    "E": { "F1": [400, 600], "F2": [1700, 2100] },
-    "I": { "F1": [250, 350], "F2": [2100, 2500] },
-    "O": { "F1": [400, 600], "F2": [800, 1000] },
-    "U": { "F1": [250, 350], "F2": [600, 900] }
+  "fingerprintBands": [
+    { "name": "B1", "range": [200, 400] },
+    { "name": "B2", "range": [400, 800] },
+    { "name": "B3", "range": [800, 1200] },
+    { "name": "B4", "range": [1200, 1800] },
+    { "name": "B5", "range": [1800, 2500] }
+  ],
+  "vowelFingerprints": {
+    "A": [0.3, 0.4, 0.2, 0.1, 0.0],
+    "E": [0.1, 0.2, 0.1, 0.3, 0.3],
+    "I": [0.0, 0.1, 0.1, 0.2, 0.6],
+    "O": [0.2, 0.3, 0.4, 0.1, 0.0],
+    "U": [0.4, 0.3, 0.2, 0.1, 0.0]
   },
   "detection": {
-    "confidenceThreshold": 0.7,
-    "smoothingWindow": 5,
-    "minVolumeDb": -40,
-    "peakThreshold": 0.3,
-    "formantSearchRange": {
-      "F1": [200, 1000],
-      "F2": [500, 3000]
-    }
+    "confidenceThreshold": 0.12,
+    "smoothingWindow": 12,
+    "minVolumeDb": -70,
+    "noiseFloor": 0.005
   },
   "labels": ["A", "E", "I", "O", "U", "noise"]
 }
