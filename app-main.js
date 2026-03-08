@@ -208,9 +208,9 @@ async function startMicrophone() {
         // Create audio source
         source = audioContext.createMediaStreamSource(stream);
         
-        // Agregar Booster de volumen vía Software (x5) para micrófonos débiles
+        // Agregar Booster de volumen vía Software (x4) para micrófonos débiles (reducido al 80% del original)
         const gainNode = audioContext.createGain();
-        gainNode.gain.value = 5.0;
+        gainNode.gain.value = 4.0;
         
         // Create analyser
         analyser = audioContext.createAnalyser();

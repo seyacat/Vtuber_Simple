@@ -3,11 +3,16 @@ import { config } from './config.js';
 export let currentVowel = '--';
 export let currentConfidence = 0;
 export let fingerprintHistory = [];
-const MAX_HISTORY = 10;
+// Consecutive detection variables
+export let consecutiveVowel = '--';
+export let consecutiveCount = 0;
 export let debugMode = false;
 export let logFingerprints = false;
 export let calibrationMode = false;
 export let calibratedVowels = null;
+
+// Dynamic Noise Floor
+export let dynamicNoiseFloor = -70;
 
 export let guidedCalibration = {
     active: false,
@@ -38,16 +43,27 @@ export function loadCalibrationFromLocalStorage() {
         const data = localStorage.getItem('vtube_mel_calibration');
         if (data) {
             const parsed = JSON.parse(data);
-            if (parsed.vowels && Object.keys(parsed.vowels).length === 5) {
+            if (parsed.vowels && Object.keys(parsed.vowels).length >= 5) {
+                // Remove Silencio data if it existed
+                if (parsed.vowels['Silencio']) delete parsed.vowels['Silencio'];
                 calibratedVowels = parsed.vowels;
-                console.log("Loaded custom MEL calibration from localStorage:", calibratedVowels);
+                console.log("Loaded custom MEL calibration from localStorage");
             }
         }
     } catch (e) {
         console.error("Error loading calibration:", e);
     }
+    
+    // Load saved noise floor
+    const savedNoiseFloor = localStorage.getItem('vtube_noise_floor');
+    if (savedNoiseFloor !== null && !isNaN(parseFloat(savedNoiseFloor))) {
+        dynamicNoiseFloor = parseFloat(savedNoiseFloor);
+        console.log("Loaded dynamic noise floor from localStorage:", dynamicNoiseFloor.toFixed(2), "dB");
+    }
 }
 loadCalibrationFromLocalStorage();
+
+let lastNoiseFloorSaveTime = 0;
 
 export function toggleDebugMode() {
     debugMode = !debugMode;
@@ -210,13 +226,41 @@ function calculateVolumeDb(timeData) {
 export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
     const volumeDb = calculateVolumeDb(timeData);
 
-    if (volumeDb < config.detection.minVolumeDb) {
-        currentVowel = '--';
+    // DYNAMIC NOISE FLOOR ALGORITHM
+    // LERP el piso de ruido solo hacia abajo rápidamente, y hacia arriba MUY lentamente
+    // Si el volumen está por debajo del piso de ruido actual o cerca, bajamos el piso
+    if (volumeDb < dynamicNoiseFloor) {
+        // Fast attack down
+        dynamicNoiseFloor += (volumeDb - dynamicNoiseFloor) * 0.5;
+    } else {
+        // Very slow decay up
+        dynamicNoiseFloor += (volumeDb - dynamicNoiseFloor) * 0.001;
+    }
+    
+    // Safety boundaries
+    if (dynamicNoiseFloor > -30) dynamicNoiseFloor = -30;
+    if (dynamicNoiseFloor < -90) dynamicNoiseFloor = -90;
+
+    // Use dynamic floor with a safety margin (e.g. +8 dB) vs config fallback 
+    let activeThreshold = dynamicNoiseFloor + 8;
+    
+    // Save the noise floor every 2 seconds to local storage to persist the calibration
+    const now = Date.now();
+    if (now - lastNoiseFloorSaveTime > 2000) {
+        localStorage.setItem('vtube_noise_floor', dynamicNoiseFloor.toString());
+        lastNoiseFloorSaveTime = now;
+    }
+    
+    if (volumeDb < activeThreshold) {
+        // En silencio, conservamos la ÚLTIMA vocal detectada (currentVowel no cambia)
+        // pero reseteamos la racha y la confianza para indicar que ya no se está hablando.
         currentConfidence = 0;
+        consecutiveVowel = '--';
+        consecutiveCount = 0;
 
         if (typeof vowelDetectionEl !== 'undefined') {
-            vowelDetectionEl.textContent = currentVowel;
-            vowelConfidenceEl.textContent = '--%';
+            vowelDetectionEl.textContent = currentVowel; // Mantiene la última vocal
+            vowelConfidenceEl.textContent = '0%';
         }
         if (typeof frequencyValueEl !== 'undefined') {
             frequencyValueEl.textContent = 'Silence';
@@ -237,32 +281,18 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
 
     const { vowel, confidence, minDistance } = classifyVowelMel(fingerprint);
 
-    fingerprintHistory.push({ vowel, confidence });
-    if (fingerprintHistory.length > config.detection.smoothingWindow) {
-        fingerprintHistory.shift();
+    // Require 3 consecutive identical detections to change the current vowel
+    if (vowel === consecutiveVowel) {
+        consecutiveCount++;
+    } else {
+        consecutiveVowel = vowel;
+        consecutiveCount = 1;
     }
 
-    let vowelCounts = {};
-    let maxCount = 0;
-    let mostFrequentVowel = '--';
-
-    for (const entry of fingerprintHistory) {
-        if (entry.vowel === '--') continue;
-        vowelCounts[entry.vowel] = (vowelCounts[entry.vowel] || 0) + 1;
-        if (vowelCounts[entry.vowel] > maxCount) {
-            maxCount = vowelCounts[entry.vowel];
-            mostFrequentVowel = entry.vowel;
-        }
+    if (consecutiveCount >= 3) {
+        currentVowel = consecutiveVowel;
+        currentConfidence = confidence * 100;
     }
-
-    let avgConfidence = 0;
-    if (mostFrequentVowel !== '--') {
-        const relevantEntries = fingerprintHistory.filter(entry => entry.vowel === mostFrequentVowel);
-        avgConfidence = relevantEntries.reduce((sum, entry) => sum + entry.confidence, 0) / relevantEntries.length;
-    }
-
-    currentVowel = mostFrequentVowel;
-    currentConfidence = avgConfidence * 100;
 
     if (typeof vowelDetectionEl !== 'undefined') {
         vowelDetectionEl.textContent = currentVowel;

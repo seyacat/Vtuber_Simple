@@ -12,7 +12,7 @@ export let config = {
     detection: {
         confidenceThreshold: 0.12,
         smoothingWindow: 12,
-        minVolumeDb: -70,
+        minVolumeDb: -45, // Elevado desde -70 para ignorar el silencio absoluto
         noiseFloor: 0.005
     },
     labels: ["A", "E", "I", "O", "U", "noise"]
