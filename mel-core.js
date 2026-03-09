@@ -11,6 +11,15 @@ export let calibratedVowels = null;
 // Dynamic Noise Floor
 export let dynamicNoiseFloor = -70;
 
+// ─────────────────────────────────────────────
+// VOCAL ATTACK DETECTION STATE
+// ─────────────────────────────────────────────
+let prevFreqData = null;           // Previous frame spectrum (for spectral flux)
+let activeWindows = [];            // Overlapping classification windows [{start, votes, voteCount}]
+let lastAttackTime = 0;            // Timestamp of last detected attack (for min gap)
+let lastEnergyDb = -90;            // Frame-to-frame energy
+let smoothedSpeechEnergy = -90;    // LERP baseline of active-speech energy (volume-adaptive)
+
 export let guidedCalibration = {
     active: false,
     state: 'idle',
@@ -220,41 +229,77 @@ function calculateVolumeDb(timeData) {
     return 20 * Math.log10(rms + 1e-10);
 }
 
+/**
+ * Spectral Flux: measures how fast the spectrum is changing.
+ * Returns a value in [0, 1] where 1 = maximum spectral change.
+ */
+function computeSpectralFlux(freqData) {
+    if (!prevFreqData || prevFreqData.length !== freqData.length) {
+        prevFreqData = new Float32Array(freqData);
+        return 0;
+    }
+    let flux = 0;
+    const len = freqData.length;
+    for (let i = 0; i < len; i++) {
+        // Half-wave rectification: only count increases (positive onset energy)
+        const diff = freqData[i] - prevFreqData[i];
+        if (diff > 0) flux += diff;
+    }
+    // Copy current frame as previous for next call
+    prevFreqData.set(freqData);
+    // Normalize: flux is in dB-units; divide by len to get per-bin average
+    return flux / len;
+}
+
+/**
+ * Decides whether a new vocal onset (attack) is happening.
+ * Uses a combination of:
+ *   - energyDb rising above the active threshold
+ *   - spectral flux above a minimum threshold
+ */
+function detectVocalAttack(energyDb, spectralFlux, activeThreshold) {
+    // Rise relative to the adaptive speech baseline — volume-independent
+    const energyRise = energyDb - smoothedSpeechEnergy;
+    const fluxThreshold      = config.detection?.attackFluxThreshold ?? 0.5;
+    const energyRiseThreshold = config.detection?.attackEnergyRise  ?? 2.5;
+
+    return (
+        energyDb   > activeThreshold     &&
+        energyRise > energyRiseThreshold &&
+        spectralFlux > fluxThreshold
+    );
+}
+
 export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
     const volumeDb = calculateVolumeDb(timeData);
 
     // DYNAMIC NOISE FLOOR ALGORITHM
-    // LERP el piso de ruido solo hacia abajo rápidamente, y hacia arriba MUY lentamente
-    // Si el volumen está por debajo del piso de ruido actual o cerca, bajamos el piso
     if (volumeDb < dynamicNoiseFloor) {
-        // Fast attack down
         dynamicNoiseFloor += (volumeDb - dynamicNoiseFloor) * (config.detection?.lerpAttackDown || 0.5);
     } else {
-        // Very slow decay up
         dynamicNoiseFloor += (volumeDb - dynamicNoiseFloor) * (config.detection?.lerpDecayUp || 0.001);
     }
-    
-    // Safety boundaries
     if (dynamicNoiseFloor > -30) dynamicNoiseFloor = -30;
     if (dynamicNoiseFloor < -90) dynamicNoiseFloor = -90;
 
-    // Use dynamic floor with a safety margin (centralized in config.detection.noiseFloorMargin)
-    let activeThreshold = dynamicNoiseFloor + (config.detection?.noiseFloorMargin || 8.0);
-    
-    // Save the noise floor every 2 seconds to local storage to persist the calibration
+    const activeThreshold = dynamicNoiseFloor + (config.detection?.noiseFloorMargin || 8.0);
+
+    // Save the noise floor every 2 seconds
     const now = Date.now();
     if (now - lastNoiseFloorSaveTime > 2000) {
         localStorage.setItem('vtube_noise_floor', dynamicNoiseFloor.toString());
         lastNoiseFloorSaveTime = now;
     }
-    
-    if (volumeDb < activeThreshold) {
-        // En silencio, conservamos la ÚLTIMA vocal detectada (currentVowel no cambia)
-        // pero reseteamos la racha y la confianza para indicar que ya no se está hablando.
-        currentConfidence = 0;
 
+    // ── SILENCE CHECK ─────────────────────────────────────────────────────────
+    if (volumeDb < activeThreshold) {
+        currentConfidence = 0;
+        // Flush any open windows when we go silent
+        for (const w of activeWindows) commitWindow(w);
+        activeWindows = [];
+        lastEnergyDb = volumeDb;
         if (typeof vowelDetectionEl !== 'undefined') {
-            vowelDetectionEl.textContent = currentVowel; // Mantiene la última vocal
+            vowelDetectionEl.textContent = currentVowel;
             vowelConfidenceEl.textContent = '0%';
         }
         if (typeof frequencyValueEl !== 'undefined') {
@@ -263,65 +308,108 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
         return;
     }
 
+    // ── SPECTRAL FLUX ─────────────────────────────────────────────────────────
+    const spectralFlux = computeSpectralFlux(freqData);
+
+    // ── VOCAL ATTACK DETECTION — overlapping windows ──────────────────────────
+    const windowDuration = config.detection?.attackWindowMs   ?? 120;
+    const minGapMs       = config.detection?.attackCooldownMs ?? 80;
+
+    if (now - lastAttackTime > minGapMs) {
+        if (detectVocalAttack(volumeDb, spectralFlux, activeThreshold)) {
+            activeWindows.push({ start: now, votes: {}, voteCount: 0 });
+            lastAttackTime = now;
+            if (debugMode) console.log(`[ATTACK] flux:${spectralFlux.toFixed(2)} energy:${volumeDb.toFixed(1)}dB windows:${activeWindows.length}`);
+        }
+    }
+
+    // Expire windows that have run their full duration
+    const stillActive = [];
+    for (const w of activeWindows) {
+        if (now - w.start > windowDuration) {
+            commitWindow(w);
+        } else {
+            stillActive.push(w);
+        }
+    }
+    activeWindows = stillActive;
+
+    // Update energy trackers AFTER attack detection
+    lastEnergyDb = volumeDb;
+    const lerpSpeech = config.detection?.lerpSpeechEnergy ?? 0.05;
+    smoothedSpeechEnergy += (volumeDb - smoothedSpeechEnergy) * lerpSpeech;
+
+    // ── MEL FINGERPRINT ───────────────────────────────────────────────────────
     const fingerprint = computeMelFingerprint(freqData, sampleRate, fftSize);
-    
+
+    // ── CALIBRATION CAPTURE ───────────────────────────────────────────────────
     if (guidedCalibration.active && guidedCalibration.state === 'capturing') {
-        const now = Date.now();
         if (now - guidedCalibration.lastCaptureTime > guidedCalibration.sampleInterval) {
-             processCalibrationSample(fingerprint);
-             guidedCalibration.lastCaptureTime = now;
+            processCalibrationSample(fingerprint);
+            guidedCalibration.lastCaptureTime = now;
+        }
+        return;
+    }
+
+    // ── CLASSIFICATION (fed into all open windows) ────────────────────────────
+    if (activeWindows.length === 0) {
+        if (typeof frequencyValueEl !== 'undefined') {
+            frequencyValueEl.textContent = `Flux:${spectralFlux.toFixed(2)}`;
         }
         return;
     }
 
     const { vowel, confidence, minDistance } = classifyVowelMel(fingerprint);
 
-    // FIFO Window Majority Vote
-    fingerprintHistory.push(vowel);
-    const windowSize = config.detection?.smoothingWindow || 10;
-    if (fingerprintHistory.length > windowSize) {
-        fingerprintHistory.shift();
-    }
-
-    // Count occurrences in history
-    let counts = {};
-    let maxCount = 0;
-    let winner = currentVowel; // Default to last detected
-
-    for (const v of fingerprintHistory) {
-        if (v === '--') continue;
-        counts[v] = (counts[v] || 0) + 1;
-        if (counts[v] > maxCount) {
-            maxCount = counts[v];
-            winner = v;
+    // Feed this frame's vote into every active window
+    if (vowel !== '--') {
+        for (const w of activeWindows) {
+            w.votes[vowel] = (w.votes[vowel] || 0) + 1;
+            w.voteCount++;
         }
     }
 
-    // Only update CurrentVowel if the winner is not '--'
-    if (winner !== '--') {
-        currentVowel = winner;
-        currentConfidence = confidence * 100;
+    if (debugMode) {
+        console.log(`[WINDOW×${activeWindows.length}] ${vowel} flux:${spectralFlux.toFixed(2)}`);
+    }
+    if (logFingerprints) {
+        console.log(`[CALIBRATION] Fingerprint: [${Array.from(fingerprint).map(v => v.toFixed(2)).join(',')}] -> Logic: ${vowel}`);
+    }
+    if (typeof frequencyValueEl !== 'undefined') {
+        frequencyValueEl.textContent = `Flux:${spectralFlux.toFixed(2)} Dist:${minDistance.toFixed(2)}`;
+    }
+}
+
+/**
+ * Commits a single expired window: picks the majority-vote winner and updates UI.
+ */
+function commitWindow(w) {
+    if (w.voteCount === 0) return;
+
+    let maxVotes = 0;
+    let winner = '--';
+    for (const [v, count] of Object.entries(w.votes)) {
+        if (count > maxVotes) { maxVotes = count; winner = v; }
+    }
+    if (winner === '--') return;
+
+    const voteConfidence = maxVotes / w.voteCount;
+    const minRequired    = config.detection?.attackMinVoteRatio ?? 0.35;
+
+    if (voteConfidence < minRequired) {
+        if (debugMode) console.log(`[COMMIT] Discarded — low consensus: ${(voteConfidence*100).toFixed(0)}%`);
+        return;
     }
 
+    currentVowel      = winner;
+    currentConfidence = voteConfidence * 100;
+
+    if (debugMode) {
+        console.log(`[COMMIT] → ${winner} (${(voteConfidence*100).toFixed(0)}% consensus, ${w.voteCount} frames)`);
+    }
     if (typeof vowelDetectionEl !== 'undefined') {
         vowelDetectionEl.textContent = currentVowel;
         vowelConfidenceEl.textContent = currentConfidence.toFixed(1) + '%';
-    }
-    
-    if (typeof frequencyValueEl !== 'undefined') {
-        if (currentVowel !== '--') {
-             frequencyValueEl.textContent = `Dist: ${minDistance.toFixed(2)}`;
-        } else {
-             frequencyValueEl.textContent = '--';
-        }
-    }
-
-    if (debugMode && currentVowel !== '--') {
-        console.log(`MEL - Dist: ${minDistance.toFixed(2)}, Vowel: ${currentVowel}`);
-    }
-
-    if (logFingerprints) {
-        console.log(`[CALIBRATION] Fingerprint: [${Array.from(fingerprint).map(v => v.toFixed(2)).join(',')}] -> Logic: ${vowel}`);
     }
 }
 

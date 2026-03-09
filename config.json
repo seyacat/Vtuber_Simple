@@ -13,7 +13,13 @@
     "noiseFloorMargin": 8.0,
     "maxEuclideanDistance": 2.0,
     "lerpAttackDown": 0.5,
-    "lerpDecayUp": 0.001
+    "lerpDecayUp": 0.001,
+    "attackFluxThreshold": 0.5,
+    "attackEnergyRise": 2.5,
+    "attackWindowMs": 200,
+    "attackCooldownMs": 300,
+    "attackMinVoteRatio": 0.35,
+    "lerpSpeechEnergy": 0.05
   },
   "labels": ["A", "E", "I", "O", "U"]
 }
