@@ -200,17 +200,27 @@ export function classifyVowelMel(fingerprint) {
     let targetDict = calibratedVowels || DEFAULT_VOWELS;
     
     let minDistance = Infinity;
-    for (const [v, refFp] of Object.entries(targetDict)) {
-        let dist = 0;
-        for (let i = 0; i < NUM_MEL_FILTERS; i++) {
-            const diff = fingerprint[i] - refFp[i];
-            dist += diff * diff;
-        }
-        dist = Math.sqrt(dist);
+    
+    for (const [v, rawData] of Object.entries(targetDict)) {
         
-        if (dist < minDistance) {
-            minDistance = dist;
-            vowel = v;
+        // Safety wrap: Si es la data por defecto (1D) o no tiene estructura KNN, la forzamos a 1 muestra (2D).
+        // Si ya es un arreglo de muestras (KNN), lo usamos tal cual.
+        const samplesArray = (typeof rawData[0] === 'number') ? [rawData] : rawData;
+        
+        // Probamos el frame actual contra TODAS las sub-muestras de esta vocal
+        for (const refFp of samplesArray) {
+            let dist = 0;
+            for (let i = 0; i < NUM_MEL_FILTERS; i++) {
+                const diff = fingerprint[i] - refFp[i];
+                dist += diff * diff;
+            }
+            dist = Math.sqrt(dist);
+            
+            // Si esta forma específica de decir la vocal está más cerca, ganamos
+            if (dist < minDistance) {
+                minDistance = dist;
+                vowel = v;
+            }
         }
     }
     
@@ -338,28 +348,40 @@ function computeSpectralFlux(freqData) {
  *   - energyDb rising above the active threshold
  *   - spectral flux above a minimum threshold
  */
-function detectVocalAttack(energyDb, spectralFlux, activeThreshold) {
+function detectVocalAttack(energyDb, spectralFlux, activeThreshold, isStartOfWord) {
     // Rise relative to the adaptive speech baseline — volume-independent
     const energyRise = energyDb - smoothedSpeechEnergy;
     const fluxThreshold      = config.detection?.attackFluxThreshold ?? 0.5;
     const energyRiseThreshold = config.detection?.attackEnergyRise  ?? 2.5;
-    const phoneticFluxThreshold = config.detection?.attackPhoneticFluxThreshold ?? 1.2;
+    const phoneticFluxThreshold = config.detection?.attackPhoneticFluxThreshold ?? 0.7;
     const pureEnergyRiseThreshold = config.detection?.attackPureEnergyRiseThreshold ?? 5.0;
 
-    // Camino 1: Subida de volumen + mutación de frecuencia (Después de silencio o consonantes)
+    // Camino 1: Subida de volumen + mutación de frecuencia (Estricto)
     const isVolumeAttack = (energyRise > energyRiseThreshold && spectralFlux > fluxThreshold);
     
     // Camino 2: Habla continua sin salto de volumen. Gran mutación de frecuencia fonética ("HO-LA")
-    const isPhoneticAttack = (spectralFlux > phoneticFluxThreshold);
+    // Note: It ONLY requires the raw energy to be above the noise floor (activeThreshold) and a high flux mutation.
+    const isPhoneticAttack = (energyDb > activeThreshold && spectralFlux > phoneticFluxThreshold);
 
-    // Camino 3: Subida pura de Fuerza/Gravedad. Pasa de un sonido débil a uno fuerte (ej. "oooAAA") sin cruzar el Umbral de Flujo.
+    // Camino 3: Subida pura de Fuerza/Gravedad. Pasa de un sonido débil a uno fuerte.
     const isPureEnergyAttack = (energyRise > pureEnergyRiseThreshold);
 
-    const isAttack = (energyDb > activeThreshold) && (isVolumeAttack || isPhoneticAttack || isPureEnergyAttack);
+    let isAttack = false;
+    if (energyDb > activeThreshold) {
+        if (isStartOfWord) {
+            // Al inicio de la palabra exigimos volumen Y flujo fonético 
+            // para evitar disparar falsas vocales por ruidos iniciales.
+            isAttack = isVolumeAttack;
+        } else {
+            // A mitad de la palabra somos flexibles.
+            isAttack = (isVolumeAttack || isPhoneticAttack || isPureEnergyAttack);
+        }
+    }
 
     let attackType = '';
     if (isAttack) {
-        if (isVolumeAttack) attackType = 'VOLUME';
+        if (isStartOfWord) attackType = 'NEW WORD';
+        else if (isVolumeAttack) attackType = 'VOLUME';
         else if (isPhoneticAttack) attackType = 'PHONETIC';
         else if (isPureEnergyAttack) attackType = 'ENERGY';
     }
@@ -383,14 +405,16 @@ function detectVocalAttack(energyDb, spectralFlux, activeThreshold) {
         // Colores de Flux
         if (isAttack && attackType === 'PHONETIC') {
             elFlux.style.color = '#0ff'; // Cyan brillante si fue ataque Fonético
+        } else if (spectralFlux > phoneticFluxThreshold) {
+            elFlux.style.color = '#ff0'; // Amarillo: Supera el umbral fonético pero no atacó por alguna razón matemática
         } else if (spectralFlux > fluxThreshold) {
-            elFlux.style.color = '#0f0'; // Verde clásico
+            elFlux.style.color = '#0f0'; // Verde: Superó base pero no fonética (Sirve para Camino 1)
         } else {
             elFlux.style.color = '#fff';
         }
         
-        document.getElementById('debugThrEnergyRise').textContent = energyRiseThreshold + " ó " + pureEnergyRiseThreshold + " (puro)";
-        document.getElementById('debugThrFlux').textContent = fluxThreshold + " ó " + phoneticFluxThreshold + " (fonético)";
+        document.getElementById('debugThrEnergyRise').textContent = `${energyRiseThreshold.toFixed(1)} ó ${pureEnergyRiseThreshold.toFixed(1)} (puro)`;
+        document.getElementById('debugThrFlux').textContent = `${fluxThreshold.toFixed(1)} ó ${phoneticFluxThreshold.toFixed(1)} (fonético)`;
     }
 
     // LOGGING DETALLADO PARA DEPURAR FALSOS POSITIVOS
@@ -468,9 +492,10 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
         : (config.detection?.attackCooldownMs ?? 80);
         
     const wordBoundaryMs  = config.detection?.wordBoundaryMs ?? 500;
+    const isStartOfWord   = (now - lastAttackTime > wordBoundaryMs);
 
     if (now - lastAttackTime > minGapMs) {
-        if (detectVocalAttack(volumeDb, spectralFlux, activeThreshold)) {
+        if (detectVocalAttack(volumeDb, spectralFlux, activeThreshold, isStartOfWord)) {
             // Flush any currently open windows BEFORE starting the new one
             for (const w of activeWindows) {
                 const duration = now - w.start;
@@ -674,20 +699,11 @@ function processCalibrationSample(fingerprint) {
 
 function processVowelData() {
     const currentVowel = guidedCalibration.vowels[guidedCalibration.currentVowelIndex];
-    const samples = guidedCalibration.capturedSamples;
+    // Convert float32 arrays to regular arrays for easy JSON storage
+    const samples = guidedCalibration.capturedSamples.map(sample => Array.from(sample));
     
-    const avgFingerprint = new Float32Array(NUM_MEL_FILTERS);
-    for (let s of samples) {
-        for (let i = 0; i < NUM_MEL_FILTERS; i++) {
-            avgFingerprint[i] += s[i];
-        }
-    }
-    
-    for (let i = 0; i < NUM_MEL_FILTERS; i++) {
-        avgFingerprint[i] /= samples.length;
-    }
-    
-    guidedCalibration.calibrationData[currentVowel] = Array.from(avgFingerprint);
+    // Guardamos el arreglo bidimensional con TODAS las muestras (ej. 5 muestras de 32 coeficientes)
+    guidedCalibration.calibrationData[currentVowel] = samples;
     
     updateVowelIndicator(currentVowel, 'complete');
     
