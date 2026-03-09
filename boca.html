@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Boca Dinámica VTuber</title>
+    <style>
+        body {
+            background-color: transparent; /* Ideal para OBS */
+            margin: 0;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+            font-family: sans-serif;
+        }
+
+        .mouth-container {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        svg {
+            width: 90%;
+            height: 90%;
+            max-width: 800px;
+            max-height: 800px;
+            filter: drop-shadow(0px 10px 15px rgba(0, 0, 0, 0.4));
+        }
+
+        #start-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(20, 20, 25, 0.9);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            z-index: 100;
+        }
+
+        button.start-btn {
+            padding: 15px 40px;
+            font-size: 1.5rem;
+            background: #ff4757;
+            color: white;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            box-shadow: 0 5px 15px rgba(255, 71, 87, 0.4);
+            transition: transform 0.2s, background 0.2s;
+        }
+
+        button.start-btn:hover {
+            transform: scale(1.05);
+            background: #ff6b81;
+        }
+        
+        .debug-text {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            color: rgba(255, 255, 255, 0.5);
+            font-family: monospace;
+            font-size: 14px;
+            pointer-events: none;
+            display: none;
+        }
+
+        .controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 50;
+            background: rgba(20, 20, 30, 0.7);
+            padding: 10px 15px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            display: none;
+        }
+        
+        .toggle-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #ccc;
+            font-size: 14px;
+            cursor: pointer;
+            user-select: none;
+        }
+        
+        .toggle-group input {
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="start-overlay">
+        <h2 style="margin-bottom: 20px;">Permiso de Micrófono Requerido</h2>
+        <button class="start-btn" id="startBtn">Iniciar Captura</button>
+    </div>
+
+    <div class="controls">
+        <label class="toggle-group">
+            <input type="checkbox" id="monitorAudioToggle"> Monitor de Audio (Con Latencia)
+        </label>
+    </div>
+
+    <div class="mouth-container">
+        <svg viewBox="0 0 100 100" id="mouth-svg">
+            <!-- Labio exterior rojo -->
+            <path id="mouth" fill="#1a1a1a" stroke="#ff4757" stroke-width="4" stroke-linejoin="round" d=""/>
+        </svg>
+    </div>
+    
+    <div class="debug-text" id="debug-info">Cargando...</div>
+
+    <!-- Mocks for mel-core.js tracking UI variables -->
+    <div id="vowelDetection" style="display:none;">--</div>
+    <div id="vowelConfidence" style="display:none;">0%</div>
+
+    <script type="module">
+        import { config, loadConfig } from './config.js';
+        import { analyzeFrame, currentVowel, currentConfidence } from './mel-core.js';
+
+        // Puntos base
+        const shapes = {
+            neutral: [
+                20, 50,                  // Izquierda (inicio)
+                40, 50, 60, 50, 80, 50,  // Curva labio superior
+                60, 50, 40, 50, 20, 50   // Curva labio inferior (vuelta)
+            ],
+            A: [
+                25, 50,
+                35, 15, 65, 15, 75, 50,
+                65, 85, 35, 85, 25, 50
+            ],
+            E: [
+                10, 50,
+                30, 30, 70, 30, 90, 50,
+                70, 70, 30, 70, 10, 50
+            ],
+            I: [
+                5, 50,
+                30, 40, 70, 40, 95, 50,
+                70, 60, 30, 60, 5, 50
+            ],
+            O: [
+                35, 50,
+                35, 15, 65, 15, 65, 50,
+                65, 85, 35, 85, 35, 50
+            ],
+            U: [
+                40, 50,
+                42, 35, 58, 35, 60, 50,
+                58, 65, 42, 65, 40, 50
+            ]
+        };
+
+        const pathEl = document.getElementById('mouth');
+        const startOverlay = document.getElementById('start-overlay');
+        const startBtn = document.getElementById('startBtn');
+        const debugInfo = document.getElementById('debug-info');
+        
+        // Expose fake elements needed by mel-core.js to not crash
+        window.vowelDetectionEl = document.getElementById('vowelDetection');
+        window.vowelConfidenceEl = document.getElementById('vowelConfidence');
+
+        let audioContext;
+        let analyser;
+        let dataArray;
+        let frequencyData;
+        let timeDataFloat;
+        let isRecording = false;
+
+        let monitorGainNode;
+        let delayNode;
+
+        // Visual State Variables
+        let visualAperture = 0;
+        let targetAperture = 0;
+        let visualTargetVowel = 'A'; // Defaults to A shape when blending
+        let currentVisualVowel = 'A';
+        let vowelTransitionProgress = 1;
+
+        // Smoothly interpolate arrays
+        function interpolateArrays(arrNeutral, arrVowel, weight) {
+            return arrNeutral.map((val, i) => val + (arrVowel[i] - val) * weight);
+        }
+
+        // Convert 14 points array to SVG Path Data
+        function toPathD(pts) {
+            return `M ${pts[0]},${pts[1]} C ${pts[2]},${pts[3]} ${pts[4]},${pts[5]} ${pts[6]},${pts[7]} C ${pts[8]},${pts[9]} ${pts[10]},${pts[11]} ${pts[12]},${pts[13]} Z`;
+        }
+
+        // --- RENDER LOOP ---
+        function renderMouthFrame() {
+            // LERPs (Suavizado de animación para no dar saltos bruscos)
+            visualAperture += (targetAperture - visualAperture) * 0.2; // Velocidad de abrir la boca
+            
+            // Si hay cambio de vocal a vocal, interpolamos progresivamente
+            if (vowelTransitionProgress < 1.0) {
+                vowelTransitionProgress += 0.15; // Velocidad de morphing entre vocales (A->O)
+                if (vowelTransitionProgress > 1.0) vowelTransitionProgress = 1.0;
+            }
+
+            // Calculo de Mezcla Base (Apertura)
+            // Primero formamos la boca origen (ej: E) y la destino (ej: O) segun cuan abierta está
+            const shapeFrom = interpolateArrays(shapes.neutral, shapes[currentVisualVowel] || shapes['A'], Math.min(visualAperture, 1.0));
+            const shapeTo = interpolateArrays(shapes.neutral, shapes[visualTargetVowel] || shapes['A'], Math.min(visualAperture, 1.0));
+
+            // Luego interpolamos entre "From" y "To" si estamos en medio de una transicion
+            const finalPuntos = shapeFrom.map((val, i) => val + (shapeTo[i] - val) * vowelTransitionProgress);
+            
+            // Actualizamos D
+            pathEl.setAttribute('d', toPathD(finalPuntos));
+            
+            if (visualAperture > 0.05) {
+                const roundedConfidence = parseInt(window.vowelConfidenceEl.textContent) || 0;
+                debugInfo.textContent = `Vocal: ${window.vowelDetectionEl.textContent} (${roundedConfidence}%) | Vol: ${targetAperture.toFixed(2)}`;
+            } else {
+                debugInfo.textContent = "Silencio (-)";
+            }
+
+            requestAnimationFrame(renderMouthFrame);
+        }
+
+
+        // --- AUDIO LOOP ---
+        function animate() {
+            if (!isRecording || !analyser) return;
+
+            // Pedir datos (Igual que en app-main.js)
+            analyser.getFloatFrequencyData(frequencyData);
+            analyser.getFloatTimeDomainData(timeDataFloat);
+
+            // Analizar (Esto internamente actualiza textContent de window.vowelDetectionEl)
+            analyzeFrame(timeDataFloat, frequencyData, audioContext.sampleRate, analyser.fftSize);
+
+            // Extraer la vocal pura reportada por el motor ('A', 'E', '--', etc)
+            let detectedVowel = window.vowelDetectionEl.textContent;
+            
+            if (detectedVowel !== '--' && shapes[detectedVowel]) {
+                if (visualTargetVowel !== detectedVowel) {
+                    currentVisualVowel = visualTargetVowel;
+                    visualTargetVowel = detectedVowel;
+                    vowelTransitionProgress = 0.0;
+                }
+            }
+
+            // Calcular volumen manual para la "Apertura"
+            let sum = 0;
+            for (let i = 0; i < timeDataFloat.length; i++) {
+                sum += timeDataFloat[i] * timeDataFloat[i];
+            }
+            const rms = Math.sqrt(sum / timeDataFloat.length);
+            const volumeDb = 20 * Math.log10(rms + 1e-10);
+
+            // Mapeamos el volumen de -60dB a -10dB (Aprox)
+            // Cuando dB sube, apertura llega a 1.0 (Boca Máxima)
+            let rawAperture = (volumeDb + 60) / 40; 
+            if (rawAperture < 0) rawAperture = 0;
+            if (rawAperture > 1.2) rawAperture = 1.2;
+
+            targetAperture = rawAperture;
+
+            // Seguir leyendo audio
+            requestAnimationFrame(animate);
+        }
+
+        async function startMicrophone() {
+            try {
+                await loadConfig();
+                
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: config.audio.sampleRate
+                });
+
+                // Get saved device from localStorage if any
+                const savedDeviceId = localStorage.getItem('selectedAudioDeviceId');
+                const audioConstraints = {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                    sampleRate: config.audio.sampleRate
+                };
+
+                if (savedDeviceId && savedDeviceId !== 'default') {
+                    audioConstraints.deviceId = { exact: savedDeviceId };
+                }
+
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+                const source = audioContext.createMediaStreamSource(stream);
+
+                const gainNode = audioContext.createGain();
+                gainNode.gain.value = config.audio?.gain || 4.0;
+
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = config.audio.fftSize;
+                analyser.smoothingTimeConstant = 0.8;
+
+                source.connect(gainNode);
+                gainNode.connect(analyser);
+
+                // --- Monitor Audio Setup ---
+                delayNode = audioContext.createDelay(2.0); // max 2 seconds delay
+                // The detection window introduces latency, typically ~200ms
+                const latencyMs = config.detection?.attackWindowMs || 200;
+                delayNode.delayTime.value = latencyMs / 1000.0;
+                
+                monitorGainNode = audioContext.createGain();
+                monitorGainNode.gain.value = document.getElementById('monitorAudioToggle').checked ? 1 : 0;
+                
+                // Route source -> delay -> monitorGain -> destination
+                source.connect(delayNode);
+                delayNode.connect(monitorGainNode);
+                monitorGainNode.connect(audioContext.destination);
+
+                document.getElementById('monitorAudioToggle').addEventListener('change', (e) => {
+                    if (monitorGainNode) {
+                        monitorGainNode.gain.value = e.target.checked ? 1 : 0;
+                    }
+                });
+
+                dataArray = new Uint8Array(analyser.fftSize);
+                frequencyData = new Float32Array(analyser.frequencyBinCount);
+                timeDataFloat = new Float32Array(analyser.fftSize);
+
+                if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                }
+
+                isRecording = true;
+                startOverlay.style.display = 'none'; // Esconder capa
+                
+                // Empezar loops
+                animate();
+
+            } catch (error) {
+                console.error("Mic Error:", error);
+                startBtn.textContent = "Error: Permiso Denegado";
+                startBtn.style.background = "#555";
+            }
+        }
+
+        startBtn.addEventListener('click', startMicrophone);
+
+        // Inicializamos frame render en neutral antes de grabar
+        pathEl.setAttribute('d', toPathD(shapes.neutral));
+        renderMouthFrame();
+
+        // Check for debug mode in URL to show controls
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('debug') === '1') {
+            document.querySelector('.controls').style.display = 'block';
+            document.querySelector('.debug-text').style.display = 'block';
+        }
+
+        // Autoplay attempt (podría fallar por política del navegador)
+        setTimeout(() => { startMicrophone(); }, 500);
+
+    </script>
+</body>
+</html>

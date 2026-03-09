@@ -6,7 +6,7 @@ export let config = {
         fftSize: 4096,
         minFrequency: 80,
         maxFrequency: 8000,
-        gain: 4.0
+        gain: 2.5
     },
     detection: {
         confidenceThreshold: 0.12,
