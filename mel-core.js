@@ -19,6 +19,7 @@ let activeWindows = [];            // Overlapping classification windows [{start
 let lastAttackTime = 0;            // Timestamp of last detected attack (for min gap)
 let lastEnergyDb = -90;            // Frame-to-frame energy
 let smoothedSpeechEnergy = -90;    // LERP baseline of active-speech energy (volume-adaptive)
+let syllableCount = 0;             // Vocal attacks detected in current word
 
 export let guidedCalibration = {
     active: false,
@@ -312,12 +313,25 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
     const spectralFlux = computeSpectralFlux(freqData);
 
     // ── VOCAL ATTACK DETECTION — overlapping windows ──────────────────────────
-    const windowDuration = config.detection?.attackWindowMs   ?? 120;
-    const minGapMs       = config.detection?.attackCooldownMs ?? 80;
+    const windowDuration  = config.detection?.attackWindowMs    ?? 200;
+    const minGapMs        = config.detection?.attackCooldownMs  ?? 80;
+    const wordBoundaryMs  = config.detection?.wordBoundaryMs    ?? 500;
 
     if (now - lastAttackTime > minGapMs) {
         if (detectVocalAttack(volumeDb, spectralFlux, activeThreshold)) {
-            activeWindows.push({ start: now, votes: {}, voteCount: 0 });
+            // If too much time passed since last attack — this is a new word
+            if (now - lastAttackTime > wordBoundaryMs) {
+                syllableCount = 0;
+                const syllableEl = document.getElementById('syllableCount');
+                if (syllableEl) syllableEl.textContent = '0 síl.';
+                if (debugMode) console.log('[WORD] New word boundary detected');
+            }
+            activeWindows.push({
+                start: now,
+                votes: {},
+                voteCount: 0,
+                fingerprints: []   // always allocated; used by calibration
+            });
             lastAttackTime = now;
             if (debugMode) console.log(`[ATTACK] flux:${spectralFlux.toFixed(2)} energy:${volumeDb.toFixed(1)}dB windows:${activeWindows.length}`);
         }
@@ -342,15 +356,6 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
     // ── MEL FINGERPRINT ───────────────────────────────────────────────────────
     const fingerprint = computeMelFingerprint(freqData, sampleRate, fftSize);
 
-    // ── CALIBRATION CAPTURE ───────────────────────────────────────────────────
-    if (guidedCalibration.active && guidedCalibration.state === 'capturing') {
-        if (now - guidedCalibration.lastCaptureTime > guidedCalibration.sampleInterval) {
-            processCalibrationSample(fingerprint);
-            guidedCalibration.lastCaptureTime = now;
-        }
-        return;
-    }
-
     // ── CLASSIFICATION (fed into all open windows) ────────────────────────────
     if (activeWindows.length === 0) {
         if (typeof frequencyValueEl !== 'undefined') {
@@ -366,6 +371,10 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
         for (const w of activeWindows) {
             w.votes[vowel] = (w.votes[vowel] || 0) + 1;
             w.voteCount++;
+            // Calibration mode: also store the raw fingerprint for averaging
+            if (guidedCalibration.active && guidedCalibration.state === 'capturing') {
+                w.fingerprints.push(new Float32Array(fingerprint));
+            }
         }
     }
 
@@ -382,6 +391,7 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
 
 /**
  * Commits a single expired window: picks the majority-vote winner and updates UI.
+ * In calibration mode, also submits the averaged fingerprint as a calibration sample.
  */
 function commitWindow(w) {
     if (w.voteCount === 0) return;
@@ -410,6 +420,24 @@ function commitWindow(w) {
     if (typeof vowelDetectionEl !== 'undefined') {
         vowelDetectionEl.textContent = currentVowel;
         vowelConfidenceEl.textContent = currentConfidence.toFixed(1) + '%';
+    }
+
+    // Increment syllable counter
+    syllableCount++;
+    const syllableEl = document.getElementById('syllableCount');
+    if (syllableEl) syllableEl.textContent = `${syllableCount} síl.`;
+
+    // ── CALIBRATION: capture one sample per detected attack ───────────────────────
+    if (guidedCalibration.active &&
+        guidedCalibration.state === 'capturing' &&
+        w.fingerprints?.length > 0) {
+        // Average all fingerprints collected during this window
+        const avgFp = new Float32Array(NUM_MEL_FILTERS);
+        for (const fp of w.fingerprints) {
+            for (let i = 0; i < NUM_MEL_FILTERS; i++) avgFp[i] += fp[i];
+        }
+        for (let i = 0; i < NUM_MEL_FILTERS; i++) avgFp[i] /= w.fingerprints.length;
+        processCalibrationSample(avgFp);
     }
 }
 
@@ -474,21 +502,22 @@ function prepareNextVowel() {
     guidedCalibration.state = 'countdown';
     guidedCalibration.countdownValue = 3;
     guidedCalibration.capturedSamples = [];
-    
+
     const currentVowel = guidedCalibration.vowels[guidedCalibration.currentVowelIndex];
     updateUIState(currentVowel);
-    
+
     const { nextVowel, calibrationInstructions } = guidedCalibration.uiElements;
     if (nextVowel) nextVowel.disabled = true;
-    if (calibrationInstructions) calibrationInstructions.textContent = `Preparándose para capturar la vocal "${currentVowel}"`;
-    
+    if (calibrationInstructions)
+        calibrationInstructions.textContent = `Prepárate para decir "${currentVowel}" varias veces`;
+
     updateVowelIndicator(currentVowel, 'active');
-    
+
     runCountdown(() => {
         guidedCalibration.state = 'capturing';
-        guidedCalibration.lastCaptureTime = Date.now();
         if (calibrationInstructions) {
-             calibrationInstructions.textContent = `¡Mantén pronunciada la vocal "${currentVowel}"!`;
+            calibrationInstructions.textContent =
+                `Di "${currentVowel}" ${guidedCalibration.samplesPerVowel} veces seguidas`;
         }
     });
 }

@@ -1,25 +1,39 @@
 {
   "audio": {
+    "sampleRate_": "Frecuencia de muestreo del AudioContext. Debe coincidir con la del micrófono para mayor compatibilidad. 16000 Hz es suficiente para voz humana.",
     "sampleRate": 16000,
-    "bufferSize": 4096,
+    "fftSize_": "Tamaño del buffer FFT. Debe ser potencia de 2. Más grande = mejor resolución de frecuencia, pero más latencia.",
     "fftSize": 4096,
+    "minFrequency_": "Frecuencia mínima (Hz) del banco de filtros Mel. Se recomienda 80 Hz para voz humana (evita ruido de baja frecuencia).",
     "minFrequency": 80,
+    "maxFrequency_": "Frecuencia máxima (Hz) del banco de filtros Mel. 8000 Hz cubre todas las formantes vocálicas relevantes.",
     "maxFrequency": 8000,
+    "gain_": "Ganancia de software aplicada al micrófono. Útil para micrófonos débiles. 1.0 = sin ganancia, 4.0 = cuádruple de volumen.",
     "gain": 4.0
   },
   "detection": {
-    "confidenceThreshold": 0.12,
-    "smoothingWindow": 12,
+    "noiseFloorMargin_": "Margen en dB sobre el piso de ruido dinámico para considerar que hay habla activa. Sube este valor si el sistema activa con ruido ambiental.",
     "noiseFloorMargin": 8.0,
+    "maxEuclideanDistance_": "Distancia euclidiana máxima permitida entre la huella Mel capturada y un prototipo de vocal. Por encima se descarta como '--'. Bajar para ser más estricto.",
     "maxEuclideanDistance": 2.0,
+    "lerpAttackDown_": "Velocidad con la que el piso de ruido dinámico baja cuando el volumen cae por debajo de él. 0.5 = muy rápido.",
     "lerpAttackDown": 0.5,
+    "lerpDecayUp_": "Velocidad con la que el piso de ruido sube cuando hay un sonido más fuerte que el piso actual. 0.001 = muy lento (evita que ruido transitorio eleve el piso).",
     "lerpDecayUp": 0.001,
+    "lerpSpeechEnergy_": "Velocidad de adaptación del baseline de energía de habla activa. Este baseline es la referencia para el detector de ataque; si es muy rápido (>0.1) puede copiar el ataque antes de detectarlo.",
+    "lerpSpeechEnergy": 0.05,
+    "attackFluxThreshold_": "Umbral mínimo de Spectral Flux (dB/bin promedio) para considerar un onset vocálico. Bajar si no detecta ataques débiles.",
     "attackFluxThreshold": 0.5,
+    "attackEnergyRise_": "Subida mínima de energía en dB respecto al baseline adaptativo para considerar un ataque vocal. Es relativo, no absoluto, por lo que funciona a cualquier volumen.",
     "attackEnergyRise": 2.5,
+    "attackWindowMs_": "Duración en ms de la ventana de clasificación que se abre tras detectar un ataque. Los votos acumulados durante este tiempo eligen la vocal.",
     "attackWindowMs": 200,
-    "attackCooldownMs": 300,
+    "attackCooldownMs_": "Gap mínimo en ms entre el inicio de dos ventanas de ataque consecutivas. Permite detectar sílabas rápidas sin re-disparar en la misma transiente.",
+    "attackCooldownMs": 80,
+    "attackMinVoteRatio_": "Fracción mínima de frames dentro de la ventana que deben coincidir en la misma vocal para aceptar el resultado. 0.35 = al menos 35% de consenso.",
     "attackMinVoteRatio": 0.35,
-    "lerpSpeechEnergy": 0.05
+    "wordBoundaryMs_": "Gap en ms entre dos ataques vocales consecutivos a partir del cual se considera que empezó una nueva palabra. Si el ataque anterior fue hace más de este tiempo, se resetea el contador de sílabas.",
+    "wordBoundaryMs": 500
   },
   "labels": ["A", "E", "I", "O", "U"]
 }

@@ -1,0 +1,1 @@
+npx http-server -S -C certs/localhost.crt -K certs/localhost.key -p 8080
