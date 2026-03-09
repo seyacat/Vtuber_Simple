@@ -422,12 +422,9 @@ function detectVocalAttack(energyDb, spectralFlux, activeThreshold, isStartOfWor
     }
 
     // LOGGING DETALLADO PARA DEPURAR FALSOS POSITIVOS
-    if (isAttack) {
+    if (isAttack && debugMode) {
         const timeStr = new Date().toISOString().substring(11, 23); // HH:mm:ss.SSS
         console.log(`%c[ATTACK TRIGGERED ${timeStr}]%c [${attackType}] energyRise: ${energyRise.toFixed(2)} (umbral: ${energyRiseThreshold}), flux: ${spectralFlux.toFixed(2)} (umbral: ${fluxThreshold})`, 'color: #00ff00; font-weight: bold;', 'color: inherit;');
-    } else if (energyDb > activeThreshold && (energyRise > energyRiseThreshold || spectralFlux > fluxThreshold)) {
-        // Solo para ver si casi pasa (uno de los dos umbrales se cumplió)
-        // console.log(`[ATTACK NEAR MISS] energyRise: ${energyRise.toFixed(2)}/${energyRiseThreshold}, flux: ${spectralFlux.toFixed(2)}/${fluxThreshold}`);
     }
 
     return isAttack;
