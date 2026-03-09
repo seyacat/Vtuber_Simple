@@ -245,7 +245,11 @@ function commitWindow(w) {
     let bestVowel = '--';
     let maxVotes = 0;
     for (const [v, count] of Object.entries(w.votes)) {
-        if (count > maxVotes) {
+        // En caso de empate de frames, gana la vocal que haya acumulado mayor confianza combinada
+        const currentConfSum = w.confidences[v];
+        const bestConfSum = w.confidences[bestVowel] || 0;
+        
+        if (count > maxVotes || (count === maxVotes && currentConfSum > bestConfSum)) {
             maxVotes = count;
             bestVowel = v;
         }
@@ -515,6 +519,7 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
             activeWindows.push({
                 start: now,
                 votes: {},
+                confidences: {},   // Sumatoria de confianza matemática para desempates
                 voteCount: 0,
                 fingerprints: []   // always allocated; used by calibration
             });
@@ -560,6 +565,7 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
         // Only count votes if it's a valid recognized vowel
         if (vowel !== '--') {
             w.votes[vowel] = (w.votes[vowel] || 0) + 1;
+            w.confidences[vowel] = (w.confidences[vowel] || 0) + confidence;
             w.voteCount++;
         }
         
