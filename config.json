@@ -4,27 +4,16 @@
     "bufferSize": 4096,
     "fftSize": 4096,
     "minFrequency": 80,
-    "maxFrequency": 3000
-  },
-  "fingerprintBands": [
-    { "name": "B1", "range": [200, 400] },
-    { "name": "B2", "range": [400, 800] },
-    { "name": "B3", "range": [800, 1200] },
-    { "name": "B4", "range": [1200, 1800] },
-    { "name": "B5", "range": [1800, 2500] }
-  ],
-  "vowelFingerprints": {
-    "A": [0.426, 0.337, 0.205, 0.031, 0],
-    "E": [0.634, 0.325, 0.03, 0.004, 0.006],
-    "I": [0.906, 0.091, 0, 0, 0.003],
-    "O": [0.541, 0.4, 0.059, 0, 0],
-    "U": [0.682, 0.297, 0.02, 0, 0]
+    "maxFrequency": 8000,
+    "gain": 4.0
   },
   "detection": {
     "confidenceThreshold": 0.12,
     "smoothingWindow": 12,
-    "minVolumeDb": -70,
-    "noiseFloor": 0.005
+    "noiseFloorMargin": 8.0,
+    "maxEuclideanDistance": 2.0,
+    "lerpAttackDown": 0.5,
+    "lerpDecayUp": 0.001
   },
-  "labels": ["A", "E", "I", "O", "U", "noise"]
+  "labels": ["A", "E", "I", "O", "U"]
 }

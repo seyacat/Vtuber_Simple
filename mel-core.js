@@ -3,9 +3,6 @@ import { config } from './config.js';
 export let currentVowel = '--';
 export let currentConfidence = 0;
 export let fingerprintHistory = [];
-// Consecutive detection variables
-export let consecutiveVowel = '--';
-export let consecutiveCount = 0;
 export let debugMode = false;
 export let logFingerprints = false;
 export let calibrationMode = false;
@@ -203,7 +200,7 @@ export function classifyVowelMel(fingerprint) {
         }
     }
     
-    const maxDist = 2.0; 
+    const maxDist = config.detection?.maxEuclideanDistance || 2.0; 
     if (minDistance > maxDist) {
         vowel = '--';
         confidence = 0;
@@ -231,18 +228,18 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
     // Si el volumen está por debajo del piso de ruido actual o cerca, bajamos el piso
     if (volumeDb < dynamicNoiseFloor) {
         // Fast attack down
-        dynamicNoiseFloor += (volumeDb - dynamicNoiseFloor) * 0.5;
+        dynamicNoiseFloor += (volumeDb - dynamicNoiseFloor) * (config.detection?.lerpAttackDown || 0.5);
     } else {
         // Very slow decay up
-        dynamicNoiseFloor += (volumeDb - dynamicNoiseFloor) * 0.001;
+        dynamicNoiseFloor += (volumeDb - dynamicNoiseFloor) * (config.detection?.lerpDecayUp || 0.001);
     }
     
     // Safety boundaries
     if (dynamicNoiseFloor > -30) dynamicNoiseFloor = -30;
     if (dynamicNoiseFloor < -90) dynamicNoiseFloor = -90;
 
-    // Use dynamic floor with a safety margin (e.g. +8 dB) vs config fallback 
-    let activeThreshold = dynamicNoiseFloor + 8;
+    // Use dynamic floor with a safety margin (centralized in config.detection.noiseFloorMargin)
+    let activeThreshold = dynamicNoiseFloor + (config.detection?.noiseFloorMargin || 8.0);
     
     // Save the noise floor every 2 seconds to local storage to persist the calibration
     const now = Date.now();
@@ -255,8 +252,6 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
         // En silencio, conservamos la ÚLTIMA vocal detectada (currentVowel no cambia)
         // pero reseteamos la racha y la confianza para indicar que ya no se está hablando.
         currentConfidence = 0;
-        consecutiveVowel = '--';
-        consecutiveCount = 0;
 
         if (typeof vowelDetectionEl !== 'undefined') {
             vowelDetectionEl.textContent = currentVowel; // Mantiene la última vocal
@@ -281,16 +276,30 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
 
     const { vowel, confidence, minDistance } = classifyVowelMel(fingerprint);
 
-    // Require 3 consecutive identical detections to change the current vowel
-    if (vowel === consecutiveVowel) {
-        consecutiveCount++;
-    } else {
-        consecutiveVowel = vowel;
-        consecutiveCount = 1;
+    // FIFO Window Majority Vote
+    fingerprintHistory.push(vowel);
+    const windowSize = config.detection?.smoothingWindow || 10;
+    if (fingerprintHistory.length > windowSize) {
+        fingerprintHistory.shift();
     }
 
-    if (consecutiveCount >= 3) {
-        currentVowel = consecutiveVowel;
+    // Count occurrences in history
+    let counts = {};
+    let maxCount = 0;
+    let winner = currentVowel; // Default to last detected
+
+    for (const v of fingerprintHistory) {
+        if (v === '--') continue;
+        counts[v] = (counts[v] || 0) + 1;
+        if (counts[v] > maxCount) {
+            maxCount = counts[v];
+            winner = v;
+        }
+    }
+
+    // Only update CurrentVowel if the winner is not '--'
+    if (winner !== '--') {
+        currentVowel = winner;
         currentConfidence = confidence * 100;
     }
 

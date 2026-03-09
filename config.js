@@ -1,21 +1,22 @@
-// Configuration - Fingerprint con 5 bandas
+// Configuration - Mel Filterbank & Detection
 export let config = {
     audio: {
         sampleRate: 16000,
         bufferSize: 4096,
         fftSize: 4096,
         minFrequency: 80,
-        maxFrequency: 3000
+        maxFrequency: 8000,
+        gain: 4.0
     },
-    // Removed 5-band fingerprint and vowel dynamic bands configurations for LPC.
-
     detection: {
         confidenceThreshold: 0.12,
-        smoothingWindow: 12,
-        minVolumeDb: -45, // Elevado desde -70 para ignorar el silencio absoluto
-        noiseFloor: 0.005
+        smoothingWindow: 10,
+        noiseFloorMargin: 8.0,
+        maxEuclideanDistance: 2.0,
+        lerpAttackDown: 0.5,
+        lerpDecayUp: 0.001
     },
-    labels: ["A", "E", "I", "O", "U", "noise"]
+    labels: ["A", "E", "I", "O", "U"]
 };
 
 // Load configuration from config.json
