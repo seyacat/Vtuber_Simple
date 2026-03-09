@@ -30,8 +30,6 @@
     "attackWindowMs": 200,
     "attackCooldownMs_": "Gap mínimo en ms entre el inicio de dos ventanas de ataque consecutivas. Permite detectar sílabas rápidas sin re-disparar en la misma transiente.",
     "attackCooldownMs": 100,
-    "attackDiscardWindowMs_": "Ventana en ms (muy pequeña, ej. 30 o 50) desde el inicio de un ataque. Si ocurre un segundo ataque más fuerte dentro de este tiempo, el primer sonido (usualmente una consonante o ruido inicial) se descarta por completo.",
-    "attackDiscardWindowMs": 30,
     "attackPhoneticFluxThreshold_": "Umbral de Flujo Espectral necesario para disparar un ataque cuando NO HAY incremento de volumen (es decir, en habla fluida sin pausas). Debe ser más alto que attackFluxThreshold. Ej: 1.2 o 1.5",
     "attackPhoneticFluxThreshold": 1.2,
     "attackPureEnergyRiseThreshold_": "Umbral de Subida de Energía pura. Si la voz sube de volumen MUY bruscamente, se dispara el ataque incluso si la vocal no cambió mucho su espectro (Spectral Flux). Ej: 5.0",

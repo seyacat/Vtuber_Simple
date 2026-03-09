@@ -95,6 +95,10 @@ if (typeof window !== 'undefined') {
 // MEL FILTERBANK IMPLEMENTATION
 const NUM_MEL_FILTERS = 32;
 let melFilterbank = null; // initialized on first frame
+const MIN_VOICE_HZ = 85; 
+const MAX_VOICE_HZ = 255;
+
+let holdVowelTimer = null; // Temporizador para mantener la vocal viva y compensar el delay
 
 function hzToMel(hz) {
     return 2595 * Math.log10(1 + hz / 700);
@@ -210,8 +214,11 @@ export function classifyVowelMel(fingerprint) {
         }
     }
     
+    
     const maxDist = config.detection?.maxEuclideanDistance || 2.0; 
-    if (minDistance > maxDist) {
+    
+    // Si la distancia es mayor al umbral o la vocal es un respiro (consonantes descartadas)
+    if (minDistance > maxDist || vowel === '--') {
         vowel = '--';
         confidence = 0;
     } else {
@@ -219,6 +226,79 @@ export function classifyVowelMel(fingerprint) {
     }
     
     return { vowel, confidence, minDistance };
+}
+
+function commitWindow(w) {
+    if (w.voteCount === 0) return;
+    
+    // Encontrar la vocal más votada en esa ventana temporal
+    let bestVowel = '--';
+    let maxVotes = 0;
+    for (const [v, count] of Object.entries(w.votes)) {
+        if (count > maxVotes) {
+            maxVotes = count;
+            bestVowel = v;
+        }
+    }
+    
+    const ratio = maxVotes / w.voteCount;
+    const minRatio = config.detection?.attackMinVoteRatio ?? 0.35;
+    
+    if (ratio >= minRatio && bestVowel !== '--') {
+        currentVowel = bestVowel;
+        // Asignamos una confianza artificial basada en el ratio de votos de esa ventana
+        currentConfidence = Math.min(100, Math.round(ratio * 100));
+        
+        // --- HOLD TIMER LOGIC ---
+        // Para compensar el delay introducido por el tamaño de la ventana (ej. 200ms), 
+        // le regalaremos a la UI esos mismos 200ms de vida extra AL FINAL de la palabra.
+        const isCalibrating = guidedCalibration.active && guidedCalibration.state === 'capturing';
+        const holdDuration = isCalibrating 
+            ? (config.detection?.calibrationWindowMs ?? 300) 
+            : (config.detection?.attackWindowMs ?? 200);
+
+        if (holdVowelTimer) clearTimeout(holdVowelTimer);
+        
+        // Configuramos la muerte programada de la vocal.
+        holdVowelTimer = setTimeout(() => {
+            // Solo borramos si el motor principal está en silencio actualmente (currentConfidence en 0)
+            if (currentConfidence === 0 && typeof vowelDetectionEl !== 'undefined') {
+                vowelDetectionEl.textContent = '--';
+                vowelConfidenceEl.textContent = '0%';
+            }
+        }, holdDuration);
+
+        // Actualizamos UI Inmediatamente
+        if (typeof vowelDetectionEl !== 'undefined') {
+            vowelDetectionEl.textContent = currentVowel;
+            vowelConfidenceEl.textContent = currentConfidence + '%';
+        }
+
+        // Increment syllable count ONLY for normal words (not silences, not calibrating)
+        if (!isCalibrating && currentVowel !== '--') {
+            syllableCount++;
+            const syllableEl = document.getElementById('syllableCount');
+            if (syllableEl) syllableEl.textContent = `${syllableCount} síl.`;
+        }
+
+        // --- CALIBRATION FINGERPRINT PROCESSING ---
+        if (isCalibrating && w.fingerprints.length > 0) {
+            const avgFp = new Float32Array(NUM_MEL_FILTERS);
+            for (let i = 0; i < NUM_MEL_FILTERS; i++) {
+                let sum = 0;
+                for (let j = 0; j < w.fingerprints.length; j++) {
+                    sum += w.fingerprints[j][i];
+                }
+                avgFp[i] = sum / w.fingerprints.length;
+            }
+            // Trigger the UI callback to store this single attack sample
+            processCalibrationSample(avgFp);
+        }
+
+        if (debugMode) console.log(`[COMMIT] Vowel: ${bestVowel} (${(ratio*100).toFixed(0)}% agreement) - Syllables: ${syllableCount}`);
+    } else {
+        if (debugMode) console.log(`[DISCARD] No consensus (best: ${bestVowel} at ${(ratio*100).toFixed(0)}%)`);
+    }
 }
 
 function calculateVolumeDb(timeData) {
@@ -277,6 +357,13 @@ function detectVocalAttack(energyDb, spectralFlux, activeThreshold) {
 
     const isAttack = (energyDb > activeThreshold) && (isVolumeAttack || isPhoneticAttack || isPureEnergyAttack);
 
+    let attackType = '';
+    if (isAttack) {
+        if (isVolumeAttack) attackType = 'VOLUME';
+        else if (isPhoneticAttack) attackType = 'PHONETIC';
+        else if (isPureEnergyAttack) attackType = 'ENERGY';
+    }
+
     // Actualiza la UI de diagnóstico en tiempo real
     const elEnergy = document.getElementById('debugEnergyRise');
     const elFlux = document.getElementById('debugFlux');
@@ -285,7 +372,7 @@ function detectVocalAttack(energyDb, spectralFlux, activeThreshold) {
         elFlux.textContent = spectralFlux.toFixed(2);
         
         // Colores de Energy Rise
-        if (isPureEnergyAttack) {
+        if (isAttack && attackType === 'ENERGY') {
             elEnergy.style.color = '#f0f'; // Magenta brillante si fue de Pura Energía
         } else if (energyRise > energyRiseThreshold) {
             elEnergy.style.color = '#0f0'; // Verde clásico
@@ -294,7 +381,7 @@ function detectVocalAttack(energyDb, spectralFlux, activeThreshold) {
         }
         
         // Colores de Flux
-        if (isPhoneticAttack) {
+        if (isAttack && attackType === 'PHONETIC') {
             elFlux.style.color = '#0ff'; // Cyan brillante si fue ataque Fonético
         } else if (spectralFlux > fluxThreshold) {
             elFlux.style.color = '#0f0'; // Verde clásico
@@ -309,7 +396,7 @@ function detectVocalAttack(energyDb, spectralFlux, activeThreshold) {
     // LOGGING DETALLADO PARA DEPURAR FALSOS POSITIVOS
     if (isAttack) {
         const timeStr = new Date().toISOString().substring(11, 23); // HH:mm:ss.SSS
-        console.log(`%c[ATTACK TRIGGERED ${timeStr}]%c energyRise: ${energyRise.toFixed(2)} (umbral: ${energyRiseThreshold}), flux: ${spectralFlux.toFixed(2)} (umbral: ${fluxThreshold})`, 'color: #00ff00; font-weight: bold;', 'color: inherit;');
+        console.log(`%c[ATTACK TRIGGERED ${timeStr}]%c [${attackType}] energyRise: ${energyRise.toFixed(2)} (umbral: ${energyRiseThreshold}), flux: ${spectralFlux.toFixed(2)} (umbral: ${fluxThreshold})`, 'color: #00ff00; font-weight: bold;', 'color: inherit;');
     } else if (energyDb > activeThreshold && (energyRise > energyRiseThreshold || spectralFlux > fluxThreshold)) {
         // Solo para ver si casi pasa (uno de los dos umbrales se cumplió)
         // console.log(`[ATTACK NEAR MISS] energyRise: ${energyRise.toFixed(2)}/${energyRiseThreshold}, flux: ${spectralFlux.toFixed(2)}/${fluxThreshold}`);
@@ -346,10 +433,19 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
         for (const w of activeWindows) commitWindow(w);
         activeWindows = [];
         lastEnergyDb = volumeDb;
+        
+        // Cancelar el timer para que no sobreescriba tardíamente
+        if (holdVowelTimer) {
+            clearTimeout(holdVowelTimer);
+            holdVowelTimer = null;
+        }
+
+        // El usuario solicitó volver a borrar la UI inmediatamente en el silencio
         if (typeof vowelDetectionEl !== 'undefined') {
-            vowelDetectionEl.textContent = currentVowel;
+            vowelDetectionEl.textContent = '--';
             vowelConfidenceEl.textContent = '0%';
         }
+        
         if (typeof frequencyValueEl !== 'undefined') {
             frequencyValueEl.textContent = 'Silence';
         }
@@ -375,19 +471,11 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
 
     if (now - lastAttackTime > minGapMs) {
         if (detectVocalAttack(volumeDb, spectralFlux, activeThreshold)) {
-            // Flush or discard any currently open windows BEFORE starting the new one
+            // Flush any currently open windows BEFORE starting the new one
             for (const w of activeWindows) {
                 const duration = now - w.start;
-                const discardWindowMs = config.detection?.attackDiscardWindowMs ?? 30;
-                
-                // Si la ventana es sobreescrita dentro de los primeros X ms configurados,
-                // significa que la primera transiente fue ruido inicial ("L") y el nuevo pico es la real ("A").
-                if (duration <= discardWindowMs) {
-                    if (debugMode) console.log(`[ATTACK OVERRIDE] DISCARDED previous false attack at ${duration}ms in favor of new one.`);
-                } else {
-                    if (debugMode) console.log(`[ATTACK OVERRIDE] Closing window early at ${duration}ms`);
-                    commitWindow(w);
-                }
+                if (debugMode) console.log(`[ATTACK OVERRIDE] Closing window early at ${duration}ms`);
+                commitWindow(w);
             }
             activeWindows = [];
 
@@ -468,57 +556,6 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
     }
 }
 
-/**
- * Commits a single expired window: picks the majority-vote winner and updates UI.
- * In calibration mode, also submits the averaged fingerprint as a calibration sample.
- */
-function commitWindow(w) {
-    if (w.voteCount === 0) return;
-
-    let maxVotes = 0;
-    let winner = '--';
-    for (const [v, count] of Object.entries(w.votes)) {
-        if (count > maxVotes) { maxVotes = count; winner = v; }
-    }
-    if (winner === '--') return;
-
-    const voteConfidence = maxVotes / w.voteCount;
-    const minRequired    = config.detection?.attackMinVoteRatio ?? 0.35;
-
-    if (voteConfidence < minRequired) {
-        if (debugMode) console.log(`[COMMIT] Discarded — low consensus: ${(voteConfidence*100).toFixed(0)}%`);
-        return;
-    }
-
-    currentVowel      = winner;
-    currentConfidence = voteConfidence * 100;
-
-    if (debugMode) {
-        console.log(`[COMMIT] → ${winner} (${(voteConfidence*100).toFixed(0)}% consensus, ${w.voteCount} frames)`);
-    }
-    if (typeof vowelDetectionEl !== 'undefined') {
-        vowelDetectionEl.textContent = currentVowel;
-        vowelConfidenceEl.textContent = currentConfidence.toFixed(1) + '%';
-    }
-
-    // Increment syllable counter
-    syllableCount++;
-    const syllableEl = document.getElementById('syllableCount');
-    if (syllableEl) syllableEl.textContent = `${syllableCount} síl.`;
-
-    // ── CALIBRATION: capture one sample per detected attack ───────────────────────
-    if (guidedCalibration.active &&
-        guidedCalibration.state === 'capturing' &&
-        w.fingerprints?.length > 0) {
-        // Average all fingerprints collected during this window
-        const avgFp = new Float32Array(NUM_MEL_FILTERS);
-        for (const fp of w.fingerprints) {
-            for (let i = 0; i < NUM_MEL_FILTERS; i++) avgFp[i] += fp[i];
-        }
-        for (let i = 0; i < NUM_MEL_FILTERS; i++) avgFp[i] /= w.fingerprints.length;
-        processCalibrationSample(avgFp);
-    }
-}
 
 export function initCalibrationUI() {
     guidedCalibration.uiElements = {
