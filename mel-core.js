@@ -339,12 +339,19 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
 
     if (now - lastAttackTime > minGapMs) {
         if (detectVocalAttack(volumeDb, spectralFlux, activeThreshold)) {
-            // Flush any currently open windows BEFORE starting the new one
-            // This forces the previous vowel identification to stop and show its result
-            // as soon as the new syllable attacks.
+            // Flush or discard any currently open windows BEFORE starting the new one
             for (const w of activeWindows) {
-                if (debugMode) console.log(`[ATTACK OVERRIDE] Closing window early at ${now - w.start}ms`);
-                commitWindow(w);
+                const duration = now - w.start;
+                const discardWindowMs = config.detection?.attackDiscardWindowMs ?? 30;
+                
+                // Si la ventana es sobreescrita dentro de los primeros X ms configurados,
+                // significa que la primera transiente fue ruido inicial ("L") y el nuevo pico es la real ("A").
+                if (duration <= discardWindowMs) {
+                    if (debugMode) console.log(`[ATTACK OVERRIDE] DISCARDED previous false attack at ${duration}ms in favor of new one.`);
+                } else {
+                    if (debugMode) console.log(`[ATTACK OVERRIDE] Closing window early at ${duration}ms`);
+                    commitWindow(w);
+                }
             }
             activeWindows = [];
 

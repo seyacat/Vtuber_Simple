@@ -30,6 +30,8 @@
     "attackWindowMs": 200,
     "attackCooldownMs_": "Gap mínimo en ms entre el inicio de dos ventanas de ataque consecutivas. Permite detectar sílabas rápidas sin re-disparar en la misma transiente.",
     "attackCooldownMs": 100,
+    "attackDiscardWindowMs_": "Ventana en ms (muy pequeña, ej. 30 o 50) desde el inicio de un ataque. Si ocurre un segundo ataque más fuerte dentro de este tiempo, el primer sonido (usualmente una consonante o ruido inicial) se descarta por completo.",
+    "attackDiscardWindowMs": 130,
     "attackMinVoteRatio_": "Fracción mínima de frames dentro de la ventana que deben coincidir en la misma vocal para aceptar el resultado. 0.35 = al menos 35% de consenso.",
     "attackMinVoteRatio": 0.35,
     "wordBoundaryMs_": "Gap en ms entre dos ataques vocales consecutivos a partir del cual se considera que empezó una nueva palabra. Si el ataque anterior fue hace más de este tiempo, se resetea el contador de sílabas.",
