@@ -77,6 +77,21 @@
                 </div>
             </div>
 
+            <!-- Debug Panel para Diagnosticar Umbrales -->
+            <div class="info-panel" style="margin-top: 15px;">
+                <div class="info-box" style="flex: 1 1 100%;">
+                    <h3>Detector Debug (¿Por qué no detecta?)</h3>
+                    <p style="font-size: 0.9em; font-family: monospace; line-height: 1.5; color: #aaa;">
+                        Energy Rise: <span id="debugEnergyRise" style="font-weight:bold; color:#fff;">0.00</span> 
+                        <span style="opacity:0.5">/ <span id="debugThrEnergyRise">2.5</span></span><br>
+                        
+                        Spectral Flux: <span id="debugFlux" style="font-weight:bold; color:#fff;">0.00</span> 
+                        <span style="opacity:0.5">/ <span id="debugThrFlux">0.5</span></span>
+                    </p>
+                    <p style="font-size:0.75em; opacity:0.7; margin-top:8px;">* Ambos deben estar en <span style="color:#0f0;">VERDE</span> a la vez para iniciar una detección.</p>
+                </div>
+            </div>
+
             <div class="instructions">
                 <h3>How to use:</h3>
                 <ul>

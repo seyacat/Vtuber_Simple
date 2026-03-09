@@ -263,12 +263,48 @@ function detectVocalAttack(energyDb, spectralFlux, activeThreshold) {
     const energyRise = energyDb - smoothedSpeechEnergy;
     const fluxThreshold      = config.detection?.attackFluxThreshold ?? 0.5;
     const energyRiseThreshold = config.detection?.attackEnergyRise  ?? 2.5;
+    const phoneticFluxThreshold = config.detection?.attackPhoneticFluxThreshold ?? 1.2;
+    const pureEnergyRiseThreshold = config.detection?.attackPureEnergyRiseThreshold ?? 5.0;
 
-    const isAttack = (
-        energyDb   > activeThreshold     &&
-        energyRise > energyRiseThreshold &&
-        spectralFlux > fluxThreshold
-    );
+    // Camino 1: Subida de volumen + mutación de frecuencia (Después de silencio o consonantes)
+    const isVolumeAttack = (energyRise > energyRiseThreshold && spectralFlux > fluxThreshold);
+    
+    // Camino 2: Habla continua sin salto de volumen. Gran mutación de frecuencia fonética ("HO-LA")
+    const isPhoneticAttack = (spectralFlux > phoneticFluxThreshold);
+
+    // Camino 3: Subida pura de Fuerza/Gravedad. Pasa de un sonido débil a uno fuerte (ej. "oooAAA") sin cruzar el Umbral de Flujo.
+    const isPureEnergyAttack = (energyRise > pureEnergyRiseThreshold);
+
+    const isAttack = (energyDb > activeThreshold) && (isVolumeAttack || isPhoneticAttack || isPureEnergyAttack);
+
+    // Actualiza la UI de diagnóstico en tiempo real
+    const elEnergy = document.getElementById('debugEnergyRise');
+    const elFlux = document.getElementById('debugFlux');
+    if (elEnergy && elFlux) {
+        elEnergy.textContent = Math.max(0, energyRise).toFixed(2);
+        elFlux.textContent = spectralFlux.toFixed(2);
+        
+        // Colores de Energy Rise
+        if (isPureEnergyAttack) {
+            elEnergy.style.color = '#f0f'; // Magenta brillante si fue de Pura Energía
+        } else if (energyRise > energyRiseThreshold) {
+            elEnergy.style.color = '#0f0'; // Verde clásico
+        } else {
+            elEnergy.style.color = '#fff';
+        }
+        
+        // Colores de Flux
+        if (isPhoneticAttack) {
+            elFlux.style.color = '#0ff'; // Cyan brillante si fue ataque Fonético
+        } else if (spectralFlux > fluxThreshold) {
+            elFlux.style.color = '#0f0'; // Verde clásico
+        } else {
+            elFlux.style.color = '#fff';
+        }
+        
+        document.getElementById('debugThrEnergyRise').textContent = energyRiseThreshold + " ó " + pureEnergyRiseThreshold + " (puro)";
+        document.getElementById('debugThrFlux').textContent = fluxThreshold + " ó " + phoneticFluxThreshold + " (fonético)";
+    }
 
     // LOGGING DETALLADO PARA DEPURAR FALSOS POSITIVOS
     if (isAttack) {
