@@ -9,7 +9,7 @@
     "maxFrequency_": "Frecuencia máxima (Hz) del banco de filtros Mel. 8000 Hz cubre todas las formantes vocálicas relevantes.",
     "maxFrequency": 8000,
     "gain_": "Ganancia de software aplicada al micrófono. Útil para micrófonos débiles. 1.0 = sin ganancia, 4.0 = cuádruple de volumen.",
-    "gain": 4.0
+    "gain": 2.5
   },
   "detection": {
     "noiseFloorMargin_": "Margen en dB sobre el piso de ruido dinámico para considerar que hay habla activa. Sube este valor si el sistema activa con ruido ambiental.",
@@ -29,11 +29,15 @@
     "attackWindowMs_": "Duración en ms de la ventana de clasificación que se abre tras detectar un ataque. Los votos acumulados durante este tiempo eligen la vocal.",
     "attackWindowMs": 200,
     "attackCooldownMs_": "Gap mínimo en ms entre el inicio de dos ventanas de ataque consecutivas. Permite detectar sílabas rápidas sin re-disparar en la misma transiente.",
-    "attackCooldownMs": 80,
+    "attackCooldownMs": 100,
     "attackMinVoteRatio_": "Fracción mínima de frames dentro de la ventana que deben coincidir en la misma vocal para aceptar el resultado. 0.35 = al menos 35% de consenso.",
     "attackMinVoteRatio": 0.35,
     "wordBoundaryMs_": "Gap en ms entre dos ataques vocales consecutivos a partir del cual se considera que empezó una nueva palabra. Si el ataque anterior fue hace más de este tiempo, se resetea el contador de sílabas.",
-    "wordBoundaryMs": 500
+    "wordBoundaryMs": 500,
+    "calibrationWindowMs_": "Duración en ms de la ventana de captura al calibrar. Más larga que la normal para agarrar la vocal sostenida de forma estable.",
+    "calibrationWindowMs": 300,
+    "calibrationCooldownMs_": "Gap mínimo en ms entre muestras durante la calibración. Muy largo (500ms) porque el usuario pronuncia vocales sueltas separadas, no palabras fluidas.",
+    "calibrationCooldownMs": 500
   },
   "labels": ["A", "E", "I", "O", "U"]
 }

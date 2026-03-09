@@ -264,11 +264,22 @@ function detectVocalAttack(energyDb, spectralFlux, activeThreshold) {
     const fluxThreshold      = config.detection?.attackFluxThreshold ?? 0.5;
     const energyRiseThreshold = config.detection?.attackEnergyRise  ?? 2.5;
 
-    return (
+    const isAttack = (
         energyDb   > activeThreshold     &&
         energyRise > energyRiseThreshold &&
         spectralFlux > fluxThreshold
     );
+
+    // LOGGING DETALLADO PARA DEPURAR FALSOS POSITIVOS
+    if (isAttack) {
+        const timeStr = new Date().toISOString().substring(11, 23); // HH:mm:ss.SSS
+        console.log(`%c[ATTACK TRIGGERED ${timeStr}]%c energyRise: ${energyRise.toFixed(2)} (umbral: ${energyRiseThreshold}), flux: ${spectralFlux.toFixed(2)} (umbral: ${fluxThreshold})`, 'color: #00ff00; font-weight: bold;', 'color: inherit;');
+    } else if (energyDb > activeThreshold && (energyRise > energyRiseThreshold || spectralFlux > fluxThreshold)) {
+        // Solo para ver si casi pasa (uno de los dos umbrales se cumplió)
+        // console.log(`[ATTACK NEAR MISS] energyRise: ${energyRise.toFixed(2)}/${energyRiseThreshold}, flux: ${spectralFlux.toFixed(2)}/${fluxThreshold}`);
+    }
+
+    return isAttack;
 }
 
 export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
@@ -313,9 +324,18 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
     const spectralFlux = computeSpectralFlux(freqData);
 
     // ── VOCAL ATTACK DETECTION — overlapping windows ──────────────────────────
-    const windowDuration  = config.detection?.attackWindowMs    ?? 200;
-    const minGapMs        = config.detection?.attackCooldownMs  ?? 80;
-    const wordBoundaryMs  = config.detection?.wordBoundaryMs    ?? 500;
+    // En calibración queremos capturas limpias y aisladas, sin solapamiento
+    const isCalibrating = guidedCalibration.active && guidedCalibration.state === 'capturing';
+    
+    const windowDuration  = isCalibrating 
+        ? (config.detection?.calibrationWindowMs ?? 300) 
+        : (config.detection?.attackWindowMs ?? 200);
+        
+    const minGapMs        = isCalibrating
+        ? (config.detection?.calibrationCooldownMs ?? 500)
+        : (config.detection?.attackCooldownMs ?? 80);
+        
+    const wordBoundaryMs  = config.detection?.wordBoundaryMs ?? 500;
 
     if (now - lastAttackTime > minGapMs) {
         if (detectVocalAttack(volumeDb, spectralFlux, activeThreshold)) {
@@ -333,6 +353,9 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
                 fingerprints: []   // always allocated; used by calibration
             });
             lastAttackTime = now;
+            // Snap baseline to current volume so we don't re-trigger continuously on the same rising edge
+            smoothedSpeechEnergy = volumeDb; 
+            
             if (debugMode) console.log(`[ATTACK] flux:${spectralFlux.toFixed(2)} energy:${volumeDb.toFixed(1)}dB windows:${activeWindows.length}`);
         }
     }
