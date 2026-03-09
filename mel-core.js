@@ -339,6 +339,15 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
 
     if (now - lastAttackTime > minGapMs) {
         if (detectVocalAttack(volumeDb, spectralFlux, activeThreshold)) {
+            // Flush any currently open windows BEFORE starting the new one
+            // This forces the previous vowel identification to stop and show its result
+            // as soon as the new syllable attacks.
+            for (const w of activeWindows) {
+                if (debugMode) console.log(`[ATTACK OVERRIDE] Closing window early at ${now - w.start}ms`);
+                commitWindow(w);
+            }
+            activeWindows = [];
+
             // If too much time passed since last attack — this is a new word
             if (now - lastAttackTime > wordBoundaryMs) {
                 syllableCount = 0;
@@ -346,6 +355,7 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
                 if (syllableEl) syllableEl.textContent = '0 síl.';
                 if (debugMode) console.log('[WORD] New word boundary detected');
             }
+            
             activeWindows.push({
                 start: now,
                 votes: {},
@@ -356,7 +366,7 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
             // Snap baseline to current volume so we don't re-trigger continuously on the same rising edge
             smoothedSpeechEnergy = volumeDb; 
             
-            if (debugMode) console.log(`[ATTACK] flux:${spectralFlux.toFixed(2)} energy:${volumeDb.toFixed(1)}dB windows:${activeWindows.length}`);
+            if (debugMode) console.log(`[ATTACK] flux:${spectralFlux.toFixed(2)} energy:${volumeDb.toFixed(1)}dB`);
         }
     }
 
@@ -389,15 +399,18 @@ export function analyzeFrame(timeData, freqData, sampleRate, fftSize) {
 
     const { vowel, confidence, minDistance } = classifyVowelMel(fingerprint);
 
-    // Feed this frame's vote into every active window
-    if (vowel !== '--') {
-        for (const w of activeWindows) {
+    // Feed this frame's vote and fingerprints into every active window
+    for (const w of activeWindows) {
+        // Only count votes if it's a valid recognized vowel
+        if (vowel !== '--') {
             w.votes[vowel] = (w.votes[vowel] || 0) + 1;
             w.voteCount++;
-            // Calibration mode: also store the raw fingerprint for averaging
-            if (guidedCalibration.active && guidedCalibration.state === 'capturing') {
-                w.fingerprints.push(new Float32Array(fingerprint));
-            }
+        }
+        
+        // Calibration mode: store the raw fingerprint unconditionally 
+        // We need ALL frames inside the attack window to learn new bounds
+        if (guidedCalibration.active && guidedCalibration.state === 'capturing') {
+            w.fingerprints.push(new Float32Array(fingerprint));
         }
     }
 

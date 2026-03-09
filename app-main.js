@@ -23,6 +23,7 @@ let analyser;
 let source;
 let dataArray;
 let frequencyData;
+let timeDataFloat;
 let animationId;
 let isRecording = false;
 
@@ -97,12 +98,14 @@ function drawWaveform() {
         ctx.strokeStyle = '#00dbde';
         ctx.beginPath();
         
-        const sliceWidth = canvasWidth / dataArray.length;
+        const sliceWidth = canvasWidth / timeDataFloat.length;
         let x = 0;
         
-        for (let i = 0; i < dataArray.length; i++) {
-            const v = dataArray[i] / 128.0;
-            const y = (v * canvasHeight) / 2;
+        for (let i = 0; i < timeDataFloat.length; i++) {
+            // timeDataFloat values go from -1.0 to 1.0 (or slightly exceed if distorted)
+            // mapped to canvas: -1.0 -> bottom, 1.0 -> top, 0.0 -> center
+            const v = timeDataFloat[i];
+            const y = (0.5 - (v / 2)) * canvasHeight;
             
             if (i === 0) {
                 ctx.moveTo(x, y);
@@ -142,8 +145,7 @@ function animate() {
     // Get float frequency data (in dB) for Mel Filterbank visualization
     analyser.getFloatFrequencyData(frequencyData);
 
-    // Get time domain data as floats for volume calculation
-    const timeDataFloat = new Float32Array(analyser.fftSize);
+    // Get time domain data as floats for volume calculation & waveform visualization
     analyser.getFloatTimeDomainData(timeDataFloat);
 
     // Analyze using Mel Filterbanks
@@ -224,6 +226,7 @@ async function startMicrophone() {
         // Create data arrays
         dataArray = new Uint8Array(analyser.fftSize);
         frequencyData = new Float32Array(analyser.frequencyBinCount);
+        timeDataFloat = new Float32Array(analyser.fftSize);
         
         // Resume audio context if suspended (required by autoplay policy)
         if (audioContext.state === 'suspended') {

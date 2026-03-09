@@ -23,7 +23,8 @@ export let config = {
 export async function loadConfig() {
     let fileConfig = {};
     try {
-        const response = await fetch('./config.json');
+        // Añade un timestamp para evitar la caché del navegador al leer el JSON
+        const response = await fetch('./config.json?t=' + Date.now());
         if (response.ok) {
             fileConfig = await response.json();
             console.log('Configuration loaded from config.json');
@@ -34,7 +35,12 @@ export async function loadConfig() {
         console.warn('Error loading config.json:', error, 'Using default configuration');
     }
     
-    // Merge configurations
-    config = { ...config, ...fileConfig };
+    // Merge profundo de la configuración
+    config = { 
+        audio: { ...config.audio, ...(fileConfig.audio || {}) },
+        detection: { ...config.detection, ...(fileConfig.detection || {}) },
+        labels: fileConfig.labels || config.labels
+    };
+    
     console.log('Final configuration loaded:', config);
 }
