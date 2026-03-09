@@ -31,3 +31,15 @@ A diferencia de los detectores básicos de formantes, este algoritmo:
 3. Lo compara con las huellas de referencia guardadas (A, E, I, O, U) usando la distancia Euclidiana, seleccionando la vocal ganadora ("Best Match").
 4. Utiliza detección de ataque vocal (Vocal Attack) analizando tanto las subidas repentinas de volumen como los cambios abruptos en la composición armónica (Spectral Flux) para saber exactamente cuándo empieza una sílaba nueva.
 5. Emplea un algoritmo de calibración de piso de ruido (Dynamic Noise Floor) que se adapta automáticamente a tu entorno para ignorar el ruido de fondo o los ventiladores.
+
+## 📡 Integración con OBS vía WebSocket (Audio Streaming)
+La aplicación soporta recibir audio en crudo directamente desde un plugin de OBS u otra fuente local, bypaseando la necesidad de seleccionar un micrófono físico en el navegador.
+
+Para activarlo, debes pasar el parámetro `?port=` en la URL apuntando al puerto donde tu plugin está emitiendo el websocket:
+- Ejemplo: `index.html?port=9904`
+- Ejemplo: `boca.html?port=9904`
+
+**Beneficios de esta integración:**
+- **Latencia Optimizada**: El audio en crudo (`Float32Array`) se inyecta directamente al `AudioContext` usando buffers nativos de la Web Audio API.
+- **Sin Eco**: El stream entrante es redirigido a las rutinas de análisis (FFT/Gain) pero es silenciado (`gain.value = 0`) antes de llegar al master de salida de tus auriculares.
+- **Requiere Interacción**: Por políticas de "Autoplay" de los navegadores modernos, iniciar mediante WebSocket requiere que el usuario haga clic manualmente en "Start Microphone" o interactúe con el documento una vez cargado.

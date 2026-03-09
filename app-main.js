@@ -176,6 +176,9 @@ async function startMicrophone() {
             return;
         }
         
+        const urlParams = new URLSearchParams(window.location.search);
+        const wsPort = urlParams.get('port');
+        
         // Create audio context
         audioContext = new (window.AudioContext || window.webkitAudioContext)({
             sampleRate: config.audio.sampleRate
@@ -183,45 +186,92 @@ async function startMicrophone() {
         
         console.log('Audio context created, sample rate:', config.audio.sampleRate);
         
-        // Get selected device ID from dropdown
-        const audioInputSelect = document.getElementById('audioInput');
-        const selectedDeviceId = audioInputSelect.value;
-        
-        // Build audio constraints with optional deviceId
-        const audioConstraints = {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true, // Activado para normalizar micrófonos débiles automáticamente
-            sampleRate: config.audio.sampleRate
-        };
-        
-        // Only add deviceId if it's not "default" (which means use default device)
-        if (selectedDeviceId && selectedDeviceId !== 'default') {
-            audioConstraints.deviceId = { exact: selectedDeviceId };
-        }
-        
-        // Get microphone stream
-        const stream = await navigator.mediaDevices.getUserMedia({
-            audio: audioConstraints
-        });
-        
-        console.log('Microphone stream obtained');
-        
-        // Create audio source
-        source = audioContext.createMediaStreamSource(stream);
-        
-        // Agregar Booster de volumen vía Software para micrófonos débiles (centralizado en config.audio.gain)
         const gainNode = audioContext.createGain();
         gainNode.gain.value = config.audio?.gain || 4.0;
         
-        // Create analyser
         analyser = audioContext.createAnalyser();
         analyser.fftSize = config.audio.fftSize;
         analyser.smoothingTimeConstant = 0.8;
-        
-        // Connect nodes
-        source.connect(gainNode);
-        gainNode.connect(analyser);
+
+        if (wsPort) {
+            console.log(`Connecting to WebSocket audio on port ${wsPort}...`);
+            
+            const ws = new WebSocket(`ws://localhost:${wsPort}`);
+            ws.binaryType = 'arraybuffer';
+            
+            ws.onopen = () => {
+                console.log("WebSocket audio connected");
+                updateStatus(true, "Conectado al stream de OBS WebSocket.");
+            };
+            
+            // Connect to analyser, but mute destination so no echo
+            const muteNode = audioContext.createGain();
+            muteNode.gain.value = 0;
+            
+            gainNode.connect(analyser);
+            analyser.connect(muteNode);
+            muteNode.connect(audioContext.destination);
+            
+            ws.onmessage = (event) => {
+                const rawBuffer = event.data;
+                const float32Data = new Float32Array(rawBuffer);
+                
+                if (float32Data.length > 0 && isRecording) {
+                    const audioBuffer = audioContext.createBuffer(1, float32Data.length, config.audio.sampleRate);
+                    audioBuffer.copyToChannel(float32Data, 0);
+
+                    const bufferSource = audioContext.createBufferSource();
+                    bufferSource.buffer = audioBuffer;
+                    bufferSource.connect(gainNode);
+                    bufferSource.start();
+                }
+            };
+            
+            ws.onerror = (e) => {
+                console.error("WebSocket error:", e);
+                updateStatus(false, "Error de conexión WebSocket");
+            };
+            
+            ws.onclose = () => {
+                console.log("WebSocket audio disconnected");
+                updateStatus(false, "WebSocket desconectado");
+                if (isRecording) stopMicrophone();
+            };
+            
+            window.wsAudio = ws; // save reference to close it later
+            
+        } else {
+            // Get selected device ID from dropdown
+            const audioInputSelect = document.getElementById('audioInput');
+            const selectedDeviceId = audioInputSelect.value;
+            
+            // Build audio constraints with optional deviceId
+            const audioConstraints = {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true, // Activado para normalizar micrófonos débiles automáticamente
+                sampleRate: config.audio.sampleRate
+            };
+            
+            // Only add deviceId if it's not "default" (which means use default device)
+            if (selectedDeviceId && selectedDeviceId !== 'default') {
+                audioConstraints.deviceId = { exact: selectedDeviceId };
+            }
+            
+            // Get microphone stream
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: audioConstraints
+            });
+            
+            console.log('Microphone stream obtained');
+            
+            // Create audio source
+            source = audioContext.createMediaStreamSource(stream);
+            
+            // Connect nodes
+            source.connect(gainNode);
+            gainNode.connect(analyser);
+        }
         
         // Create data arrays
         dataArray = new Uint8Array(analyser.fftSize);
@@ -236,6 +286,11 @@ async function startMicrophone() {
                 console.log('Audio context resumed successfully');
             } catch (resumeError) {
                 console.warn('Could not resume audio context:', resumeError.message);
+                updateStatus(false, 'Audio Context blocked by browser autoplay policy. Please click "Start Microphone" to begin.');
+                isRecording = false;
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                return; // Abort if we can't resume
             }
         }
         
@@ -392,6 +447,13 @@ window.addEventListener('load', async () => {
     
     // Delay de 1 segundo para asegurar que todo esté listo antes de activar el micrófono
     setTimeout(async () => {
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('port')) {
+             console.log('WebSocket port detected, waiting for user interaction to start audio context.');
+             updateStatus(false, 'Click "Start Microphone" to connect to OBS WebSocket.');
+             return;
+        }
+
         console.log('Starting microphone after 1 second delay...');
         
         // Try to start microphone automatically
