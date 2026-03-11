@@ -31,6 +31,15 @@
             max-width: 800px;
             max-height: 800px;
             filter: drop-shadow(0px 10px 15px rgba(0, 0, 0, 0.4));
+            /* Fade OUT (Silencio) dura 1 segundo */
+            opacity: 0;
+            transition: opacity 1s ease-out;
+        }
+
+        svg.active-audio {
+            /* Fade IN (Hablando) dura 0.5 segundos */
+            opacity: 1;
+            transition: opacity 0.5s ease-in;
         }
 
         #start-overlay {
@@ -119,7 +128,7 @@
     <div class="mouth-container">
         <svg viewBox="0 0 100 100" id="mouth-svg">
             <!-- Labio exterior rojo -->
-            <path id="mouth" fill="#1a1a1a" stroke="#ff4757" stroke-width="4" stroke-linejoin="round" d=""/>
+            <path id="mouth" fill="#1a1a1a" stroke="#ff4757" stroke-width="2" stroke-linejoin="round" d=""/>
         </svg>
     </div>
     
@@ -203,14 +212,24 @@
             return `M ${pts[0]},${pts[1]} C ${pts[2]},${pts[3]} ${pts[4]},${pts[5]} ${pts[6]},${pts[7]} C ${pts[8]},${pts[9]} ${pts[10]},${pts[11]} ${pts[12]},${pts[13]} Z`;
         }
 
+        let lastTime = 0;
+
         // --- RENDER LOOP ---
-        function renderMouthFrame() {
+        function renderMouthFrame(timestamp) {
+            if (!timestamp) timestamp = performance.now();
+            let dt = (timestamp - lastTime) / (1000 / 60); // Delta scale based on 60fps (1.0 at 60Hz, 0.5 at 120Hz)
+            lastTime = timestamp;
+
+            // Cap dt to prevent massive jumps if tab is inactive
+            if (dt > 3.0) dt = 3.0;
+            if (dt <= 0) dt = 1.0;
+
             // LERPs (Suavizado de animación para no dar saltos bruscos)
-            visualAperture += (targetAperture - visualAperture) * 0.2; // Velocidad de abrir la boca
+            visualAperture += (targetAperture - visualAperture) * (0.2 * dt); // Velocidad de abrir la boca
             
             // Si hay cambio de vocal a vocal, interpolamos progresivamente
             if (vowelTransitionProgress < 1.0) {
-                vowelTransitionProgress += 0.15; // Velocidad de morphing entre vocales (A->O)
+                vowelTransitionProgress += (0.15 * dt); // Velocidad de morphing entre vocales (A->O)
                 if (vowelTransitionProgress > 1.0) vowelTransitionProgress = 1.0;
             }
 
@@ -225,10 +244,14 @@
             // Actualizamos D
             pathEl.setAttribute('d', toPathD(finalPuntos));
             
-            if (visualAperture > 0.05) {
+            // Lógica de Fade In / Fade Out usando CSS Classes
+            const svgEl = document.getElementById('mouth-svg');
+            if (visualAperture > 0.05 || targetAperture > 0.02) {
+                svgEl.classList.add('active-audio');
                 const roundedConfidence = parseInt(window.vowelConfidenceEl.textContent) || 0;
                 debugInfo.textContent = `Vocal: ${window.vowelDetectionEl.textContent} (${roundedConfidence}%) | Vol: ${targetAperture.toFixed(2)}`;
             } else {
+                svgEl.classList.remove('active-audio');
                 debugInfo.textContent = "Silencio (-)";
             }
 
@@ -282,25 +305,14 @@
             try {
                 await loadConfig();
                 
-                audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                    sampleRate: config.audio.sampleRate
-                });
-
-                // Get saved device from localStorage if any
-                const savedDeviceId = localStorage.getItem('selectedAudioDeviceId');
-                const audioConstraints = {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    sampleRate: config.audio.sampleRate
-                };
-
-                if (savedDeviceId && savedDeviceId !== 'default') {
-                    audioConstraints.deviceId = { exact: savedDeviceId };
+                if (!audioContext) {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                        sampleRate: config.audio.sampleRate
+                    });
                 }
 
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
-                const source = audioContext.createMediaStreamSource(stream);
+                const urlParams = new URLSearchParams(window.location.search);
+                const wsPort = urlParams.get('port');
 
                 const gainNode = audioContext.createGain();
                 gainNode.gain.value = config.audio?.gain || 4.0;
@@ -309,41 +321,95 @@
                 analyser.fftSize = config.audio.fftSize;
                 analyser.smoothingTimeConstant = 0.8;
 
-                source.connect(gainNode);
-                gainNode.connect(analyser);
+                if (wsPort) {
+                    console.log(`Connecting to WebSocket audio on port ${wsPort}...`);
+                    
+                    const ws = new WebSocket(`ws://localhost:${wsPort}`);
+                    ws.binaryType = 'arraybuffer';
+                    
+                    ws.onopen = () => {
+                        console.log("WebSocket audio connected");
+                    };
+                    
+                    const muteNode = audioContext.createGain();
+                    muteNode.gain.value = 0;
+                    
+                    gainNode.connect(analyser);
+                    analyser.connect(muteNode);
+                    muteNode.connect(audioContext.destination);
+                    
+                    ws.onmessage = (event) => {
+                        const rawBuffer = event.data;
+                        const float32Data = new Float32Array(rawBuffer);
+                        
+                        if (float32Data.length > 0 && isRecording) {
+                            const audioBuffer = audioContext.createBuffer(1, float32Data.length, config.audio.sampleRate);
+                            audioBuffer.copyToChannel(float32Data, 0);
 
-                // --- Monitor Audio Setup ---
-                delayNode = audioContext.createDelay(2.0); // max 2 seconds delay
-                // The detection window introduces latency, typically ~200ms
-                const latencyMs = config.detection?.attackWindowMs || 200;
-                delayNode.delayTime.value = latencyMs / 1000.0;
-                
-                monitorGainNode = audioContext.createGain();
-                monitorGainNode.gain.value = document.getElementById('monitorAudioToggle').checked ? 1 : 0;
-                
-                // Route source -> delay -> monitorGain -> destination
-                source.connect(delayNode);
-                delayNode.connect(monitorGainNode);
-                monitorGainNode.connect(audioContext.destination);
+                            const bufferSource = audioContext.createBufferSource();
+                            bufferSource.buffer = audioBuffer;
+                            bufferSource.connect(gainNode);
+                            bufferSource.start();
+                        }
+                    };
+                    
+                    ws.onerror = (e) => console.error("WebSocket error:", e);
+                    ws.onclose = () => console.log("WebSocket audio disconnected");
+                    window.wsAudio = ws;
+                } else {
+                    const savedDeviceId = localStorage.getItem('selectedAudioDeviceId');
+                    const audioConstraints = {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                        sampleRate: config.audio.sampleRate
+                    };
 
-                document.getElementById('monitorAudioToggle').addEventListener('change', (e) => {
-                    if (monitorGainNode) {
-                        monitorGainNode.gain.value = e.target.checked ? 1 : 0;
+                    if (savedDeviceId && savedDeviceId !== 'default') {
+                        audioConstraints.deviceId = { exact: savedDeviceId };
                     }
-                });
+
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+                    const source = audioContext.createMediaStreamSource(stream);
+
+                    source.connect(gainNode);
+                    gainNode.connect(analyser);
+
+                    delayNode = audioContext.createDelay(2.0); 
+                    const latencyMs = config.detection?.attackWindowMs || 200;
+                    delayNode.delayTime.value = latencyMs / 1000.0;
+                    
+                    monitorGainNode = audioContext.createGain();
+                    monitorGainNode.gain.value = document.getElementById('monitorAudioToggle').checked ? 1 : 0;
+                    
+                    source.connect(delayNode);
+                    delayNode.connect(monitorGainNode);
+                    monitorGainNode.connect(audioContext.destination);
+
+                    document.getElementById('monitorAudioToggle').addEventListener('change', (e) => {
+                        if (monitorGainNode) {
+                            monitorGainNode.gain.value = e.target.checked ? 1 : 0;
+                        }
+                    });
+                }
 
                 dataArray = new Uint8Array(analyser.fftSize);
                 frequencyData = new Float32Array(analyser.frequencyBinCount);
                 timeDataFloat = new Float32Array(analyser.fftSize);
 
                 if (audioContext.state === 'suspended') {
-                    await audioContext.resume();
+                    try {
+                        await audioContext.resume();
+                    } catch (e) {
+                         console.warn("Autoplay policy blocked AudioContext. Waiting for user interaction.", e);
+                         startBtn.textContent = "Iniciar (Requerido por Navegador)";
+                         isRecording = false;
+                         return;
+                    }
                 }
 
                 isRecording = true;
-                startOverlay.style.display = 'none'; // Esconder capa
-                
-                // Empezar loops
+                startOverlay.style.display = 'none'; 
                 animate();
 
             } catch (error) {
@@ -364,6 +430,14 @@
         if (urlParams.get('debug') === '1') {
             document.querySelector('.controls').style.display = 'block';
             document.querySelector('.debug-text').style.display = 'block';
+        }
+
+        const wsPort = urlParams.get('port');
+        if (wsPort) {
+            document.querySelector('#start-overlay h2').textContent = "Esperando Conexión OBS";
+            startBtn.textContent = "Conectar a Puerto " + wsPort;
+            // No auto-start to avoid autoplay issues on desktop browsers for testing,
+            // but in OBS it usually auto-clicks or allows autoplay. We will attempt autostart:
         }
 
         // Autoplay attempt (podría fallar por política del navegador)
